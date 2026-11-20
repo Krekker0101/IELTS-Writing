@@ -1,0 +1,543 @@
+import type { AppDatabase, MockTest, WritingTask } from '../src/types/ielts.ts';
+
+const NOW = '2026-11-20T09:00:00.000Z';
+
+export const SEED_TASKS: WritingTask[] = [
+  // Academic Task 1 - Line Graph
+  {
+    id: 'acad-t1-line-energy',
+    title: 'Renewable Energy Consumption by Source (2000–2025)',
+    format: 'academic',
+    taskNumber: 1,
+    taskType: 'Line Graph',
+    promptText:
+      'The line graph below shows the percentage of total electricity generated from four renewable energy sources in a European country between 2000 and 2025.\n\nSummarise the information by selecting and reporting the main features, and make comparisons where relevant.',
+    chartSpec: {
+      kind: 'line',
+      title: 'Electricity Generated from Renewable Sources (%)',
+      subtitle: 'Selected European country, 2000–2025',
+      unit: '%',
+      categories: ['2000', '2005', '2010', '2015', '2020', '2025'],
+      series: [
+        { name: 'Wind Power', color: '#1d4ed8', values: [8, 13, 21, 30, 38, 44] },
+        { name: 'Solar PV', color: '#d97706', values: [1, 3, 7, 15, 24, 34] },
+        { name: 'Hydropower', color: '#0f766e', values: [26, 25, 24, 23, 22, 21] },
+        { name: 'Bioenergy', color: '#64748b', values: [5, 7, 10, 12, 12, 11] },
+      ],
+    },
+    tags: ['Environment', 'Energy', 'Trends'],
+    difficulty: 'Band 7.0',
+    recommendedMinutes: 20,
+    isCustom: false,
+    createdAt: NOW,
+    learningHints: {
+      outline: [
+        'Introduction: Перефразируйте условие (the proportion of electricity produced by four clean energy sources from 2000 to 2025).',
+        'Overview: Отметьте резкий рост Wind и Solar при стабильном/слегка снижающемся уровне Hydro и умеренном плато Bioenergy.',
+        'Body Paragraph 1: Опишите лидирующий рост Wind Power (с 8% до 44%) и обгон Hydropower около 2012 года.',
+        'Body Paragraph 2: Сравните быстрый скачок Solar PV (1% -> 34%) с постепенным спадом Hydropower (26% -> 21%) и пиком Bioenergy (12%).',
+      ],
+      keyVocabulary: [
+        'overtake / surpass',
+        'steady decline',
+        'exponential growth',
+        'plateau at',
+        'account for',
+        'whereas / by contrast',
+      ],
+      pitfalls: [
+        'Не описывайте каждый год по очереди — группируйте по тенденциям и точкам пересечения.',
+        'Не добавляйте внешние причины (например, субсидии государства), которых нет на графике.',
+      ],
+    },
+  },
+
+  // Academic Task 1 - Bar Chart
+  {
+    id: 'acad-t1-bar-commute',
+    title: 'Daily Commute Modes in Three Cities',
+    format: 'academic',
+    taskNumber: 1,
+    taskType: 'Bar Chart',
+    promptText:
+      'The bar chart illustrates the proportion of commuters using four different modes of transport in three major cities (Amsterdam, London, and Toronto) in 2024.\n\nSummarise the information by selecting and reporting the main features, and make comparisons where relevant.',
+    chartSpec: {
+      kind: 'bar',
+      title: 'Primary Mode of Daily Commute by City (2024)',
+      subtitle: 'Percentage of adult workforce',
+      unit: '%',
+      categories: ['Amsterdam', 'London', 'Toronto'],
+      series: [
+        { name: 'Public Transit', color: '#1d4ed8', values: [28, 54, 41] },
+        { name: 'Private Car', color: '#64748b', values: [21, 24, 46] },
+        { name: 'Bicycle', color: '#059669', values: [39, 9, 5] },
+        { name: 'Walking', color: '#d97706', values: [12, 13, 8] },
+      ],
+    },
+    tags: ['Transport', 'Cities', 'Comparison'],
+    difficulty: 'Band 6.0',
+    recommendedMinutes: 20,
+    isCustom: false,
+    createdAt: NOW,
+    learningHints: {
+      outline: [
+        'Introduction: Перефразируйте условие о доле пассажиров, использующих 4 вида транспорта в трёх городах в 2024 году.',
+        'Overview: Выделите ключевое различие — доминирование велосипеда в Амстердаме, общественного транспорта в Лондоне и личного авто в Торонто.',
+        'Body Paragraph 1: Сравните Public Transit (лидер в Лондоне — 54%) и Private Car (лидер в Торонто — 46%).',
+        'Body Paragraph 2: Опишите Bicycle (39% в Амстердаме против 9% и 5%) и Walking (8–13%).',
+      ],
+      keyVocabulary: [
+        'the most prevalent mode',
+        'proportionally higher',
+        'lag far behind',
+        'marginally lower',
+        'respectively',
+      ],
+      pitfalls: [
+        'Убедитесь, что сумма по каждому городу (100%) упомянута корректно как доли (percentages), а не абсолютное число людей.',
+      ],
+    },
+  },
+
+  // Academic Task 1 - Pie Charts
+  {
+    id: 'acad-t1-pie-household',
+    title: 'Household Expenditure Shifts (1990 vs 2025)',
+    format: 'academic',
+    taskNumber: 1,
+    taskType: 'Pie Chart',
+    promptText:
+      'The two pie charts compare the average monthly expenditure of households in a developed country across five categories in 1990 and 2025.\n\nSummarise the information by selecting and reporting the main features, and make comparisons where relevant.',
+    chartSpec: {
+      kind: 'pie',
+      title: 'Average Household Spending Breakdown (1990 vs 2025)',
+      unit: '%',
+      categories: ['Housing & Utilities', 'Food & Groceries', 'Transport', 'Healthcare & Education', 'Leisure & Digital'],
+      series: [],
+      pieSlices: [
+        { label: 'Housing & Utilities', value: 26, color: '#1d4ed8' },
+        { label: 'Food & Groceries', value: 31, color: '#0f766e' },
+        { label: 'Transport', value: 18, color: '#64748b' },
+        { label: 'Healthcare & Education', value: 14, color: '#d97706' },
+        { label: 'Leisure & Digital', value: 11, color: '#7c3aed' },
+      ],
+      secondaryPie: {
+        title: '2025',
+        slices: [
+          { label: 'Housing & Utilities', value: 38, color: '#1d4ed8' },
+          { label: 'Food & Groceries', value: 19, color: '#0f766e' },
+          { label: 'Transport', value: 14, color: '#64748b' },
+          { label: 'Healthcare & Education', value: 17, color: '#d97706' },
+          { label: 'Leisure & Digital', value: 12, color: '#7c3aed' },
+        ],
+      },
+    },
+    tags: ['Economics', 'Society'],
+    difficulty: 'Band 7.0',
+    recommendedMinutes: 20,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // Academic Task 1 - Table
+  {
+    id: 'acad-t1-table-graduates',
+    title: 'University Graduate Employment & Starting Salaries',
+    format: 'academic',
+    taskNumber: 1,
+    taskType: 'Table',
+    promptText:
+      'The table below provides data on employment rates within six months of graduation and median starting salaries across five academic disciplines in 2024.\n\nSummarise the information by selecting and reporting the main features, and make comparisons where relevant.',
+    chartSpec: {
+      kind: 'table',
+      title: 'Graduate Outcomes by Discipline (2024)',
+      categories: [],
+      series: [],
+      tableHeaders: ['Discipline', 'Full-Time Employed (%)', 'Postgraduate Study (%)', 'Median Starting Salary ($)'],
+      tableRows: [
+        ['Computer Science', '84%', '9%', '$68,500'],
+        ['Mechanical Engineering', '81%', '11%', '$63,200'],
+        ['Business & Finance', '76%', '12%', '$57,800'],
+        ['Biological Sciences', '58%', '29%', '$46,400'],
+        ['Humanities & Arts', '52%', '24%', '$41,000'],
+      ],
+    },
+    tags: ['Education', 'Employment'],
+    difficulty: 'Band 7.0',
+    recommendedMinutes: 20,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // Academic Task 1 - Mixed Charts
+  {
+    id: 'acad-t1-mixed-water',
+    title: 'Global Water Withdrawal & Sector Usage',
+    format: 'academic',
+    taskNumber: 1,
+    taskType: 'Mixed Charts',
+    promptText:
+      'The mixed chart shows global freshwater withdrawals (in billion cubic metres, bars) alongside the share of water used by agriculture (%, line) from 1980 to 2020.\n\nSummarise the information by selecting and reporting the main features, and make comparisons where relevant.',
+    chartSpec: {
+      kind: 'mixed',
+      title: 'Freshwater Withdrawals vs Agricultural Share',
+      subtitle: 'Bars: Billion m³ · Line: Agriculture share (%)',
+      categories: ['1980', '1990', '2000', '2010', '2020'],
+      series: [
+        { name: 'Total Withdrawal (bn m³)', color: '#1d4ed8', values: [2600, 3150, 3600, 3950, 4200], type: 'bar' },
+        { name: 'Agriculture Share (%)', color: '#d97706', values: [78, 75, 72, 70, 68], type: 'line' },
+      ],
+    },
+    tags: ['Environment', 'Resources'],
+    difficulty: 'Band 8.0+',
+    recommendedMinutes: 20,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // Academic Task 1 - Maps (Generated Image)
+  {
+    id: 'acad-t1-maps-mapledurham',
+    title: 'Mapledurham Village Development (1995 vs Present Day)',
+    format: 'academic',
+    taskNumber: 1,
+    taskType: 'Maps',
+    promptText:
+      'The two maps show the layout of Mapledurham Village in 1995 and at the present day.\n\nSummarise the information by selecting and reporting the main features, and make comparisons where relevant.',
+    imageUrl: '/src/assets/images/task1_town_map_development_1795177123941.jpg',
+    tags: ['Urban Planning', 'Maps'],
+    difficulty: 'Band 7.0',
+    recommendedMinutes: 20,
+    isCustom: false,
+    createdAt: NOW,
+    learningHints: {
+      outline: [
+        'Introduction: Укажите, что карты иллюстрируют трансформацию деревни Mapledurham с 1995 года по настоящее время.',
+        'Overview: Отметьте переход от сельскохозяйственного поселения к застроенному жилому и коммерческому пригороду.',
+        'Body Paragraph 1: Изменения к западу от реки/дороги (сельхозугодья заменены на Lakeside Park, Primary Academy и Community Centre).',
+        'Body Paragraph 2: Изменения на востоке и в инфраструктуре (расширенная Main Road с круговой развязкой и новым мостом, Chelt Park Housing Estate, Supermarket и Business Park).',
+      ],
+      keyVocabulary: [
+        'was replaced by / gave way to',
+        'to the east of / along the southern bank',
+        'undergo significant urbanisation',
+        'constructed / widened / converted into',
+      ],
+      pitfalls: [
+        'Используйте компасные направления (north, south-east) и пассивный залог прошедшего/настоящего совершённого времени (has been replaced).',
+      ],
+    },
+  },
+
+  // Academic Task 1 - Process Diagrams (Generated Image)
+  {
+    id: 'acad-t1-process-geothermal',
+    title: 'Geothermal Electricity Generation Process',
+    format: 'academic',
+    taskNumber: 1,
+    taskType: 'Process Diagrams',
+    promptText:
+      'The diagram below shows how geothermal energy is used to produce electricity.\n\nSummarise the information by selecting and reporting the main features, and make comparisons where relevant.',
+    imageUrl: '/src/assets/images/task1_geothermal_process_1795177123131.jpg',
+    tags: ['Engineering', 'Energy', 'Process'],
+    difficulty: 'Band 7.0',
+    recommendedMinutes: 20,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // Academic Task 1 - Object and Technical Diagrams (Generated Image)
+  {
+    id: 'acad-t1-object-solar-still',
+    title: 'Solar Still Desalination Unit',
+    format: 'academic',
+    taskNumber: 1,
+    taskType: 'Object and Technical Diagrams',
+    promptText:
+      'The diagram illustrates the structure and working principle of a solar-powered water desalination unit.\n\nSummarise the information by selecting and reporting the main features, and make comparisons where relevant.',
+    imageUrl: '/src/assets/images/task1_solar_desalination_1795177123559.jpg',
+    tags: ['Technology', 'Water', 'Diagram'],
+    difficulty: 'Band 8.0+',
+    recommendedMinutes: 20,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // Academic Task 2 - Agree or Disagree
+  {
+    id: 'acad-t2-agree-remote-work',
+    title: 'Remote Work vs Office Collaboration',
+    format: 'academic',
+    taskNumber: 2,
+    taskType: 'Agree or Disagree',
+    promptText:
+      'Many companies now allow employees to work permanently from home. Some people argue that this harms team collaboration and innovation, while others believe the benefits outweigh the drawbacks.\n\nTo what extent do you agree or disagree that permanent remote work harms team collaboration and innovation?',
+    tags: ['Work', 'Technology', 'Society'],
+    difficulty: 'Band 7.0',
+    recommendedMinutes: 40,
+    isCustom: false,
+    createdAt: NOW,
+    learningHints: {
+      outline: [
+        'Introduction: Перефразируйте тему и сформулируйте чёткую позицию (например, частичное несогласие: хотя спонтанное общение снижается, продуманные гибридные процессы сохраняют инновации).',
+        'Body Paragraph 1: Признайте возможные потери в неформальном обмене идеями и адаптации новичков.',
+        'Body Paragraph 2: Аргументируйте, почему удалённая работа усиливает фокус, расширяет глобальный пул талантов и поддерживает асинхронную документацию.',
+        'Conclusion: Подведите итог без введения новых аргументов.',
+      ],
+      keyVocabulary: [
+        'spontaneous ideation',
+        'asynchronous collaboration',
+        'talent retention',
+        'mitigate the drawback',
+      ],
+      pitfalls: [
+        'Не забудьте ответить именно на степень согласия ("To what extent"), а не просто перечислить плюсы и минусы.',
+      ],
+    },
+  },
+
+  // Academic Task 2 - Discuss Both Views
+  {
+    id: 'acad-t2-discuss-public-art',
+    title: 'Government Funding for Arts vs Public Services',
+    format: 'academic',
+    taskNumber: 2,
+    taskType: 'Discuss Both Views',
+    promptText:
+      'Some people think that governments should invest heavily in public museums, theatres, and art programmes. Others believe public funds should be directed exclusively toward healthcare, education, and infrastructure.\n\nDiscuss both these views and give your own opinion.',
+    tags: ['Culture', 'Government', 'Funding'],
+    difficulty: 'Band 7.0',
+    recommendedMinutes: 40,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // Academic Task 2 - Advantages and Disadvantages
+  {
+    id: 'acad-t2-adv-ai-education',
+    title: 'Automated Feedback Tools in University Writing',
+    format: 'academic',
+    taskNumber: 2,
+    taskType: 'Advantages and Disadvantages',
+    promptText:
+      'Universities are increasingly adopting automated software tools to give students instant feedback on essays and assignments.\n\nDo the advantages of this trend outweigh the disadvantages?',
+    tags: ['Education', 'Technology'],
+    difficulty: 'Band 7.0',
+    recommendedMinutes: 40,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // Academic Task 2 - Problem and Solution
+  {
+    id: 'acad-t2-prob-urban-heat',
+    title: 'Urban Overcrowding & Housing Affordability',
+    format: 'academic',
+    taskNumber: 2,
+    taskType: 'Problem and Solution',
+    promptText:
+      'Rapid population growth in major metropolitan areas has led to severe housing shortages and rising living costs.\n\nWhat problems does this cause for residents, and what measures can governments take to address them?',
+    tags: ['Cities', 'Housing', 'Policy'],
+    difficulty: 'Band 6.0',
+    recommendedMinutes: 40,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // Academic Task 2 - Two-Part / Cause and Effect
+  {
+    id: 'acad-t2-cause-attention',
+    title: 'Short-Form Media and Reading Habits',
+    format: 'academic',
+    taskNumber: 2,
+    taskType: 'Cause and Effect',
+    promptText:
+      'Young adults are spending significantly less time reading long-form books compared with previous generations.\n\nWhat are the main causes of this shift, and what effects might it have on society?',
+    tags: ['Media', 'Education', 'Youth'],
+    difficulty: 'Band 7.0',
+    recommendedMinutes: 40,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  {
+    id: 'acad-t2-twopart-longevity',
+    title: 'Ageing Populations in Industrialised Nations',
+    format: 'academic',
+    taskNumber: 2,
+    taskType: 'Two-Part Questions',
+    promptText:
+      'In many countries, life expectancy is increasing while birth rates are falling.\n\nWhy is this happening, and is it a positive or negative development for society?',
+    tags: ['Demographics', 'Economy'],
+    difficulty: 'Band 8.0+',
+    recommendedMinutes: 40,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // General Training Task 1 - Formal Complaint
+  {
+    id: 'gt-t1-complaint-course',
+    title: 'Complaint About Cancelled Professional Workshop',
+    format: 'general',
+    taskNumber: 1,
+    taskType: 'Complaints',
+    promptText:
+      'You recently enrolled in a weekend professional training course, but the sessions were poorly organised and one key module was cancelled without notice.\n\nWrite a letter to the training centre manager.',
+    bulletPoints: [
+      'Give details of the course you attended',
+      'Explain the problems you experienced during the weekend',
+      'State what action you would like the manager to take',
+    ],
+    tags: ['Formal', 'Customer Service'],
+    difficulty: 'Band 6.0',
+    recommendedMinutes: 20,
+    isCustom: false,
+    createdAt: NOW,
+    learningHints: {
+      outline: [
+        'Salutation: Dear Sir or Madam (или Dear Manager), далее формальный тон без разговорных сокращений.',
+        'Paragraph 1 (Purpose): Укажите название курса, даты и причину обращения.',
+        'Paragraph 2 (Details): Чётко опишите организационные сбои и отмену модуля без предупреждения.',
+        'Paragraph 3 (Action): Запросите частичный возврат или бесплатный перенос и подпишите Yours faithfully.',
+      ],
+      keyVocabulary: [
+        'I am writing to express my dissatisfaction with',
+        'without prior notice',
+        'fall short of expectations',
+        'I would appreciate a prompt resolution',
+      ],
+      pitfalls: [
+        'Обязательно раскройте все 3 пункта письма и не смешивайте разговорный стиль с официальным.',
+      ],
+    },
+  },
+
+  // General Training Task 1 - Semi-formal Request
+  {
+    id: 'gt-t1-request-neighbour',
+    title: 'Request to Landlord Regarding Heating Repairs',
+    format: 'general',
+    taskNumber: 1,
+    taskType: 'Requests',
+    promptText:
+      'You are renting an apartment and the central heating system has stopped working properly before winter.\n\nWrite a letter to your landlord, Mr Henderson.',
+    bulletPoints: [
+      'Describe the issue with the heating system',
+      'Explain how it is affecting your daily routine',
+      'Suggest convenient times for an engineer to visit',
+    ],
+    tags: ['Semi-formal', 'Housing'],
+    difficulty: 'Band 6.0',
+    recommendedMinutes: 20,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // General Training Task 1 - Informal Advice
+  {
+    id: 'gt-t1-informal-advice',
+    title: 'Advising a Friend Moving to Your City',
+    format: 'general',
+    taskNumber: 1,
+    taskType: 'Advice and Suggestions',
+    promptText:
+      'An English-speaking friend is moving to your city next month to start a new job and has asked you for advice on settling in.\n\nWrite a letter to your friend.',
+    bulletPoints: [
+      'Recommend the best neighbourhood to live in and why',
+      'Give tips on getting around the city',
+      'Suggest ways to meet new people locally',
+    ],
+    tags: ['Informal', 'City Life'],
+    difficulty: 'Band 6.0',
+    recommendedMinutes: 20,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // General Training Task 2 - Opinion Essay
+  {
+    id: 'gt-t2-opinion-fourday-week',
+    title: 'Four-Day Working Week Proposal',
+    format: 'general',
+    taskNumber: 2,
+    taskType: 'Opinion Essays',
+    promptText:
+      'Some employers are testing a four-day working week with no reduction in pay. Do you think this is a practical policy for most businesses?\n\nGive reasons for your answer and include any relevant examples from your own knowledge or experience.',
+    tags: ['Work', 'Lifestyle'],
+    difficulty: 'Band 7.0',
+    recommendedMinutes: 40,
+    isCustom: false,
+    createdAt: NOW,
+  },
+
+  // General Training Task 2 - Discussion Essay
+  {
+    id: 'gt-t2-discussion-local-shops',
+    title: 'Small Independent Shops vs Online Supermarkets',
+    format: 'general',
+    taskNumber: 2,
+    taskType: 'Discussion Essays',
+    promptText:
+      'In many neighbourhoods, small local shops are closing because more residents buy groceries and household goods online. Some people think this is an inevitable sign of progress, while others believe communities should actively support local businesses.\n\nDiscuss both views and give your opinion.',
+    tags: ['Community', 'Commerce'],
+    difficulty: 'Band 7.0',
+    recommendedMinutes: 40,
+    isCustom: false,
+    createdAt: NOW,
+  },
+];
+
+export const SEED_MOCK_TESTS: MockTest[] = [
+  {
+    id: 'mock-acad-01',
+    title: 'Academic Mock Test 01: Energy Transition & Remote Work',
+    format: 'academic',
+    description:
+      'Полный академический модуль: динамика возобновляемой энергетики (Line Graph) + эссе о влиянии постоянной удалённой работы на инновации.',
+    difficulty: 'Band 7.0',
+    task1Id: 'acad-t1-line-energy',
+    task2Id: 'acad-t2-agree-remote-work',
+    totalMinutes: 60,
+    createdAt: NOW,
+  },
+  {
+    id: 'mock-acad-02',
+    title: 'Academic Mock Test 02: Urban Transformation & Arts Funding',
+    format: 'academic',
+    description:
+      'Карты развития города Mapledurham (1995 vs Today) + эссе Discuss Both Views о государственном финансировании культуры.',
+    difficulty: 'Band 7.0',
+    task1Id: 'acad-t1-maps-mapledurham',
+    task2Id: 'acad-t2-discuss-public-art',
+    totalMinutes: 60,
+    createdAt: NOW,
+  },
+  {
+    id: 'mock-gt-01',
+    title: 'General Training Mock Test 01: Service Complaint & Work Week',
+    format: 'general',
+    description:
+      'Официальное письмо-жалоба организаторам курса + эссе Opinion о переходе на четырёхдневную рабочую неделю.',
+    difficulty: 'Band 6.0',
+    task1Id: 'gt-t1-complaint-course',
+    task2Id: 'gt-t2-opinion-fourday-week',
+    totalMinutes: 60,
+    createdAt: NOW,
+  },
+];
+
+export const INITIAL_DB: AppDatabase = {
+  tasks: SEED_TASKS,
+  mockTests: SEED_MOCK_TESTS,
+  submissions: [],
+  errorJournal: [],
+  exercises: [],
+  complaints: [],
+  drafts: {},
+  settings: {
+    feedbackLanguage: 'ru',
+    strictness: 'standard',
+    customExaminerNote: '',
+  },
+};
