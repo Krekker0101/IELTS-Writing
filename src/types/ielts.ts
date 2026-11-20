@@ -283,3 +283,45 @@ export interface AppDatabase {
   drafts: Record<string, DraftEntry>;
   settings: EvaluationSettings;
 }
+
+export interface AnalysisProgressEvent {
+  percent: number;
+  stageKey:
+    | 'connect'
+    | 'criteria'
+    | 'checklist'
+    | 'annotations'
+    | 'revision_diff'
+    | 'anchoring'
+    | 'saving'
+    | 'done';
+  stage: string;
+  detail: string;
+  taskNumber?: TaskNumber;
+  taskStepLabel?: string;
+  charsReceived: number;
+  annotationsDetected: number;
+  elapsedSec: number;
+  estimatedRemainingSec: number | null;
+}
+
+export type AIApiConnectionState =
+  | 'checking'
+  | 'online'
+  | 'processing'
+  | 'degraded'
+  | 'offline'
+  | 'unconfigured';
+
+export interface AIHealthStatus {
+  status: Exclude<AIApiConnectionState, 'checking'>;
+  configured: boolean;
+  model: string;
+  activeRequests: number;
+  latencyMs: number | null;
+  checkedAt: string;
+  lastSuccessAt: string | null;
+  message: string;
+}
+
+

@@ -12,12 +12,16 @@ import {
   XCircle,
 } from 'lucide-react';
 import type {
+  AnalysisProgressEvent,
   Submission,
   TaskNumber,
   TaskSubmissionPart,
   TextAnnotation,
   WritingTask,
 } from '../types/ielts';
+import { AnalysisProgressPanel } from './AnalysisProgressPanel';
+import { useAIStatus } from '../contexts/AIStatusContext';
+import { postSseStream } from '../utils/sseClient';
 
 interface ReportViewProps {
   submission: Submission;
@@ -88,7 +92,9 @@ export const ReportView: React.FC<ReportViewProps> = ({
   // Improve My Writing / Revision Editor state
   const [isRevising, setIsRevising] = useState(false);
   const [revisedDraft, setRevisedDraft] = useState('');
+  const { beginProcessing, updateProcessing, endProcessing } = useAIStatus();
   const [isSubmittingRevision, setIsSubmittingRevision] = useState(false);
+  const [revisionProgress, setRevisionProgress] = useState<AnalysisProgressEvent | null>(null);
   const [revisionError, setRevisionError] = useState<string | null>(null);
 
   // Complaint modal state
@@ -126,21 +132,31 @@ export const ReportView: React.FC<ReportViewProps> = ({
   const handleSubmitRevision = async () => {
     if (!activePart || !revisedDraft.trim()) return;
     setIsSubmittingRevision(true);
+    beginProcessing('Проверка новой редакции', 2);
+    setRevisionProgress({
+      percent: 2,
+      stageKey: 'connect',
+      stage: 'Подготовка сравнения версий',
+      detail: 'Инициализируем потоковую проверку исправлений…',
+      charsReceived: 0,
+      annotationsDetected: 0,
+      elapsedSec: 0,
+      estimatedRemainingSec: null,
+    });
     setRevisionError(null);
     try {
-      const res = await fetch(`/api/submissions/${submission.id}/revise`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await postSseStream<{ submission: Submission }>(
+        `/api/submissions/${submission.id}/revise-stream`,
+        {
           taskNumber: activePart.taskNumber,
           revisedText: revisedDraft,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Не удалось проверить исправленную версию.');
-      }
-      const updated = data.submission as Submission;
+        },
+        (evt) => {
+          setRevisionProgress(evt);
+          updateProcessing(evt.percent, evt.stage);
+        }
+      );
+      const updated = data.submission;
       onSubmissionUpdated(updated);
       const nextPart = activePart.taskNumber === 1 ? updated.task1 : updated.task2;
       setSelectedRevIdxByTask((prev) => ({
@@ -155,6 +171,8 @@ export const ReportView: React.FC<ReportViewProps> = ({
       );
     } finally {
       setIsSubmittingRevision(false);
+      setRevisionProgress(null);
+      endProcessing();
     }
   };
 
@@ -510,12 +528,16 @@ export const ReportView: React.FC<ReportViewProps> = ({
               className="w-full p-6 text-[15px] leading-[1.75] text-slate-900 focus:outline-none resize-y"
             />
 
+            {isSubmittingRevision && (
+              <AnalysisProgressPanel progress={revisionProgress} isRevision />
+            )}
+
             <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={() => setIsRevising(false)}
                 disabled={isSubmittingRevision}
-                className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer"
+                className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer whitespace-nowrap"
               >
                 Отмена
               </button>
@@ -523,12 +545,14 @@ export const ReportView: React.FC<ReportViewProps> = ({
                 type="button"
                 onClick={handleSubmitRevision}
                 disabled={isSubmittingRevision}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-60 cursor-pointer"
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-60 cursor-pointer whitespace-nowrap"
               >
                 {isSubmittingRevision ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Сравниваем версии…
+                    <span className="font-mono tabular-nums">
+                      Проверка {revisionProgress?.percent ?? 0}%
+                    </span>
                   </>
                 ) : (
                   <>

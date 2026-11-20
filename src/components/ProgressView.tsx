@@ -21,6 +21,7 @@ import type {
   PersonalizedExercise,
   Submission,
 } from '../types/ielts';
+import { useAIStatus } from '../contexts/AIStatusContext';
 
 interface ProgressViewProps {
   submissions: Submission[];
@@ -41,6 +42,7 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
   onJournalUpdated,
   onUserDataCleared,
 }) => {
+  const { beginProcessing, endProcessing } = useAIStatus();
   const [selectedRuleKey, setSelectedRuleKey] = useState<string | null>(
     errorJournal[0]?.key ?? null
   );
@@ -107,12 +109,13 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
         }),
         title: s.mockTestTitle ?? s.task2?.taskTitle ?? s.task1?.taskTitle ?? `Работа #${idx + 1}`,
         overallBand,
-        taskAchievement: avgCriterion(
-          (n) => n === 'Task Achievement' || n === 'Task Response'
-        ),
-        coherence: avgCriterion((n) => n === 'Coherence and Cohesion'),
-        lexical: avgCriterion((n) => n === 'Lexical Resource'),
-        grammar: avgCriterion((n) => n === 'Grammatical Range and Accuracy'),
+        taskAchievement: avgCriterion((n) => {
+          const l = n.toLowerCase();
+          return l.includes('achievement') || l.includes('response');
+        }),
+        coherence: avgCriterion((n) => n.toLowerCase().includes('coherence')),
+        lexical: avgCriterion((n) => n.toLowerCase().includes('lexical')),
+        grammar: avgCriterion((n) => n.toLowerCase().includes('grammatical')),
       };
     });
   }, [submissions, revisionBasis]);
@@ -178,6 +181,7 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
   const handleGenerateExercises = async () => {
     setExError(null);
     setIsGeneratingEx(true);
+    beginProcessing('Генерация персональных упражнений');
     try {
       const res = await fetch('/api/exercises/generate', { method: 'POST' });
       const data = await res.json();
@@ -187,6 +191,7 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
       setExError(err instanceof Error ? err.message : 'Ошибка генерации упражнений.');
     } finally {
       setIsGeneratingEx(false);
+      endProcessing();
     }
   };
 

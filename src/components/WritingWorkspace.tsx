@@ -10,6 +10,7 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import type {
+  AnalysisProgressEvent,
   DraftEntry,
   IeltsFormat,
   MockTest,
@@ -18,6 +19,10 @@ import type {
   WritingTask,
 } from '../types/ielts';
 import { TaskVisual } from './TaskVisual';
+import { AnalysisProgressPanel } from './AnalysisProgressPanel';
+import { AIStatusIndicator } from './AIStatusIndicator';
+import { useAIStatus } from '../contexts/AIStatusContext';
+import { postSseStream } from '../utils/sseClient';
 
 export interface ActiveSessionConfig {
   sessionType: 'mock' | 'single';
@@ -79,7 +84,9 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
   const [elapsedSec, setElapsedSec] = useState<number>(0);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [showHints, setShowHints] = useState<boolean>(session.mode === 'learning');
+  const { beginProcessing, updateProcessing, endProcessing } = useAIStatus();
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgressEvent | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const task1Words = useMemo(() => countWords(task1Text), [task1Text]);
@@ -144,6 +151,17 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
     }
 
     setIsSubmitting(true);
+    beginProcessing('Проверка эссе IELTS', 2);
+    setAnalysisProgress({
+      percent: 2,
+      stageKey: 'connect',
+      stage: 'Подключение к ИИ-проверке',
+      detail: 'Инициализируем потоковый разбор работы…',
+      charsReceived: 0,
+      annotationsDetected: 0,
+      elapsedSec: 0,
+      estimatedRemainingSec: null,
+    });
     try {
       const payload: Record<string, unknown> = {
         mode: session.mode,
@@ -173,20 +191,18 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
         };
       }
 
-      const res = await fetch('/api/submissions/evaluate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Не удалось выполнить ИИ-проверку.');
-      }
+      const data = await postSseStream<{ submission: Submission }>(
+        '/api/submissions/evaluate-stream',
+        payload,
+        (evt) => {
+          setAnalysisProgress(evt);
+          updateProcessing(evt.percent, evt.stage);
+        }
+      );
 
       localStorage.removeItem(`draft_${session.draftKey}_t1`);
       localStorage.removeItem(`draft_${session.draftKey}_t2`);
-      onCompleted(data.submission as Submission);
+      onCompleted(data.submission);
     } catch (err) {
       setErrorMsg(
         err instanceof Error
@@ -195,6 +211,8 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
       );
     } finally {
       setIsSubmitting(false);
+      setAnalysisProgress(null);
+      endProcessing();
     }
   };
 
@@ -260,11 +278,13 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
             </div>
           )}
 
-          {/* Timer, Save state & Submit */}
-          <div className="flex items-center gap-4 shrink-0">
-            <span className="text-xs text-slate-500 hidden sm:inline">
+          {/* Timer, AI Status, Save state & Submit */}
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="text-xs text-slate-500 hidden xl:inline">
               {saveState === 'saving' ? 'Сохранение черновика…' : 'Черновик сохранён'}
             </span>
+
+            <AIStatusIndicator compact />
 
             {session.timerMinutes !== null ? (
               <div
@@ -293,7 +313,9 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
               {isSubmitting ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ИИ проверяет…
+                  <span className="font-mono tabular-nums">
+                    Анализ {analysisProgress?.percent ?? 0}%
+                  </span>
                 </>
               ) : (
                 <>
@@ -437,15 +459,7 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
             className="flex-1 w-full p-6 text-[15px] leading-[1.75] text-slate-900 placeholder:text-slate-400 resize-none focus:outline-none bg-white"
           />
 
-          {isSubmitting && (
-            <div className="px-6 py-3 bg-blue-50 border-t border-blue-100 flex items-center gap-2.5 text-xs text-blue-800">
-              <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-              <span>
-                Проводим многоэтапный разбор: проверяем содержание задания, структуру, лексику,
-                грамматику и формируем точные минимальные исправления…
-              </span>
-            </div>
-          )}
+          {isSubmitting && <AnalysisProgressPanel progress={analysisProgress} />}
         </div>
       </div>
     </div>

@@ -3,6 +3,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import type {
+  AnalysisProgressEvent,
   ComplaintRecord,
   DraftEntry,
   EvaluationSettings,
@@ -22,10 +23,14 @@ import {
   writeDb,
 } from './server/store.ts';
 import {
+  checkGeminiApiHealth,
+  checkRevisionStreamWithAI,
   checkRevisionWithAI,
   classifyCustomTopicWithAI,
+  evaluateEssayStreamWithAI,
   evaluateEssayWithAI,
   generatePersonalizedExercisesWithAI,
+  type GeminiProgressUpdate,
 } from './server/gemini.ts';
 
 const app = express();
@@ -253,6 +258,13 @@ app.delete('/api/drafts/:key', (req, res) => {
   res.json({ ok: true });
 });
 
+// AI: Health & active processing state
+app.get('/api/ai/health', async (req, res) => {
+  const forceProbe = req.query.force === '1' || req.query.force === 'true';
+  const health = await checkGeminiApiHealth(forceProbe);
+  res.json(health);
+});
+
 // AI: Classify custom topic & check Task 1 image legibility
 app.post('/api/ai/classify-topic', async (req, res) => {
   if (!checkAiRateLimit(req.ip || 'local')) {
@@ -416,6 +428,451 @@ app.post('/api/submissions/evaluate', async (req, res) => {
   } catch (err) {
     const formatted = formatGeminiError(err);
     res.status(formatted.status).json({ error: formatted.message });
+  }
+});
+
+// Helper for SSE streaming evaluation progress
+function computeEtaSeconds(percent: number, elapsedMs: number): number | null {
+  const elapsedSec = elapsedMs / 1000;
+  if (percent < 15 || elapsedSec < 1.5 || percent >= 100) return null;
+  const raw = Math.round((elapsedSec * (100 - percent)) / percent);
+  return Math.max(1, Math.min(90, raw));
+}
+
+function initSseResponse(res: express.Response) {
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+}
+
+function writeSseEvent(res: express.Response, event: string, data: unknown) {
+  if (res.writableEnded) return;
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+// AI: Evaluate single task or full Mock Test (SSE live progress stream)
+app.post('/api/submissions/evaluate-stream', async (req, res) => {
+  if (!checkAiRateLimit(req.ip || 'local')) {
+    res.status(429).json({ error: 'Слишком много запросов к ИИ. Попробуйте через минуту.' });
+    return;
+  }
+
+  const body = req.body as {
+    mode: 'mock' | PracticeMode;
+    format: IeltsFormat;
+    mockTestId?: string;
+    draftKey?: string;
+    task1?: { taskId: string; essayText: string; timeSpentSec: number };
+    task2?: { taskId: string; essayText: string; timeSpentSec: number };
+  };
+
+  const hasTask1 = Boolean(body.task1 && body.task1.essayText.trim());
+  const hasTask2 = Boolean(body.task2 && body.task2.essayText.trim());
+
+  if (!hasTask1 && !hasTask2) {
+    res.status(400).json({ error: 'Текст ответа пустой. Напишите хотя бы несколько предложений.' });
+    return;
+  }
+
+  const db = readDb();
+  const taskObj1 = hasTask1 ? db.tasks.find((t) => t.id === body.task1!.taskId) : undefined;
+  const taskObj2 = hasTask2 ? db.tasks.find((t) => t.id === body.task2!.taskId) : undefined;
+
+  if (hasTask1 && !taskObj1) {
+    res.status(404).json({ error: 'Задание Task 1 не найдено.' });
+    return;
+  }
+  if (hasTask2 && !taskObj2) {
+    res.status(404).json({ error: 'Задание Task 2 не найдено.' });
+    return;
+  }
+
+  initSseResponse(res);
+
+  let clientClosed = false;
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      clientClosed = true;
+    }
+  });
+
+  const startedAt = Date.now();
+  const isDualMock = hasTask1 && hasTask2;
+  let lastProgress: AnalysisProgressEvent = {
+    percent: 4,
+    stageKey: 'connect',
+    stage: 'Подготовка проверки',
+    detail: 'Отправляем задание и ваш ответ в модель Gemini…',
+    taskNumber: hasTask1 ? 1 : 2,
+    taskStepLabel: isDualMock ? 'Задание 1 из 2 (Task 1)' : undefined,
+    charsReceived: 0,
+    annotationsDetected: 0,
+    elapsedSec: 0,
+    estimatedRemainingSec: null,
+  };
+
+  const emitProgress = (evt: AnalysisProgressEvent) => {
+    lastProgress = evt;
+    if (!clientClosed) {
+      writeSseEvent(res, 'progress', evt);
+    }
+  };
+
+  emitProgress(lastProgress);
+
+  // Keep elapsed clock ticking smoothly during initial model thinking latency
+  const heartbeat = setInterval(() => {
+    if (clientClosed || res.writableEnded) return;
+    const elapsedMs = Date.now() - startedAt;
+    const elapsedSec = Math.floor(elapsedMs / 1000);
+    const nextPercent =
+      lastProgress.stageKey === 'connect' && lastProgress.percent < 11
+        ? lastProgress.percent + 1
+        : lastProgress.percent;
+    emitProgress({
+      ...lastProgress,
+      percent: nextPercent,
+      elapsedSec,
+      estimatedRemainingSec: computeEtaSeconds(nextPercent, elapsedMs),
+    });
+  }, 900);
+
+  const mapProgress = (
+    taskNum: TaskNumber,
+    stepLabel: string | undefined,
+    rangeStart: number,
+    rangeEnd: number,
+    update: GeminiProgressUpdate
+  ) => {
+    const elapsedMs = Date.now() - startedAt;
+    const scaledPercent = Math.round(
+      rangeStart + ((rangeEnd - rangeStart) * update.percent) / 100
+    );
+    const clamped = Math.max(lastProgress.percent, Math.min(96, scaledPercent));
+    emitProgress({
+      ...update,
+      percent: clamped,
+      taskNumber: taskNum,
+      taskStepLabel: stepLabel,
+      elapsedSec: Math.floor(elapsedMs / 1000),
+      estimatedRemainingSec: computeEtaSeconds(clamped, elapsedMs),
+    });
+  };
+
+  try {
+    let part1: TaskSubmissionPart | undefined;
+    let part2: TaskSubmissionPart | undefined;
+
+    if (hasTask1 && taskObj1 && body.task1) {
+      const rStart = 4;
+      const rEnd = isDualMock ? 48 : 94;
+      const stepLabel = isDualMock ? 'Часть 1 из 2 · Task 1' : 'Task 1';
+      const eval1 = await evaluateEssayStreamWithAI(
+        taskObj1,
+        body.task1.essayText,
+        db.settings,
+        (u) => mapProgress(1, stepLabel, rStart, rEnd, u)
+      );
+      part1 = {
+        taskId: taskObj1.id,
+        taskTitle: taskObj1.title,
+        taskType: taskObj1.taskType,
+        taskNumber: 1,
+        promptSnapshot: taskObj1.promptText,
+        timeSpentSec: body.task1.timeSpentSec || 0,
+        revisions: [
+          {
+            version: 1,
+            essayText: body.task1.essayText,
+            wordCount: countWords(body.task1.essayText),
+            createdAt: new Date().toISOString(),
+            evaluation: eval1,
+          },
+        ],
+      };
+    }
+
+    if (hasTask2 && taskObj2 && body.task2 && !clientClosed) {
+      const rStart = isDualMock ? 49 : 4;
+      const rEnd = 94;
+      const stepLabel = isDualMock ? 'Часть 2 из 2 · Task 2 (×2 вес)' : 'Task 2';
+      const eval2 = await evaluateEssayStreamWithAI(
+        taskObj2,
+        body.task2.essayText,
+        db.settings,
+        (u) => mapProgress(2, stepLabel, rStart, rEnd, u)
+      );
+      part2 = {
+        taskId: taskObj2.id,
+        taskTitle: taskObj2.title,
+        taskType: taskObj2.taskType,
+        taskNumber: 2,
+        promptSnapshot: taskObj2.promptText,
+        timeSpentSec: body.task2.timeSpentSec || 0,
+        revisions: [
+          {
+            version: 1,
+            essayText: body.task2.essayText,
+            wordCount: countWords(body.task2.essayText),
+            createdAt: new Date().toISOString(),
+            evaluation: eval2,
+          },
+        ],
+      };
+    }
+
+    const elapsedMs = Date.now() - startedAt;
+    emitProgress({
+      ...lastProgress,
+      percent: 97,
+      stageKey: 'saving',
+      stage: 'Сохранение результатов и обновление профиля ошибок',
+      detail: 'Рассчитываем итоговый Band Score и обновляем журнал ошибок…',
+      elapsedSec: Math.floor(elapsedMs / 1000),
+      estimatedRemainingSec: 1,
+    });
+
+    const latestDb = readDb();
+    const mockObj = body.mockTestId
+      ? latestDb.mockTests.find((m) => m.id === body.mockTestId)
+      : undefined;
+
+    const overallWritingBand =
+      part1 && part2
+        ? calculateOverallWritingBand(
+            part1.revisions[0].evaluation.taskBand,
+            part2.revisions[0].evaluation.taskBand
+          )
+        : undefined;
+
+    const now = new Date().toISOString();
+    const submission: Submission = {
+      id: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      mode: body.mode || 'practice',
+      format: body.format || 'academic',
+      mockTestId: mockObj?.id,
+      mockTestTitle: mockObj?.title,
+      createdAt: now,
+      updatedAt: now,
+      task1: part1,
+      task2: part2,
+      overallWritingBand,
+    };
+
+    latestDb.submissions.unshift(submission);
+    latestDb.errorJournal = rebuildErrorJournal(latestDb.submissions, latestDb.errorJournal);
+    if (body.draftKey) {
+      delete latestDb.drafts[body.draftKey];
+    }
+    writeDb(latestDb);
+
+    emitProgress({
+      ...lastProgress,
+      percent: 100,
+      stageKey: 'done',
+      stage: 'Проверка завершена',
+      detail: 'Диагностический отчёт готов.',
+      elapsedSec: Math.floor((Date.now() - startedAt) / 1000),
+      estimatedRemainingSec: 0,
+    });
+
+    if (!clientClosed) {
+      writeSseEvent(res, 'done', {
+        submission,
+        errorJournal: latestDb.errorJournal,
+      });
+    }
+    res.end();
+  } catch (err) {
+    const formatted = formatGeminiError(err);
+    if (!clientClosed) {
+      writeSseEvent(res, 'error', { error: formatted.message, status: formatted.status });
+    }
+    res.end();
+  } finally {
+    clearInterval(heartbeat);
+  }
+});
+
+// AI: Check student's self-revision with SSE live progress stream
+app.post('/api/submissions/:id/revise-stream', async (req, res) => {
+  if (!checkAiRateLimit(req.ip || 'local')) {
+    res.status(429).json({ error: 'Слишком много запросов к ИИ. Попробуйте через минуту.' });
+    return;
+  }
+
+  const { id } = req.params;
+  const { taskNumber, revisedText } = req.body as {
+    taskNumber: TaskNumber;
+    revisedText: string;
+  };
+
+  if (!revisedText || !revisedText.trim()) {
+    res.status(400).json({ error: 'Исправленный текст не может быть пустым.' });
+    return;
+  }
+
+  const db = readDb();
+  const subIdx = db.submissions.findIndex((s) => s.id === id);
+  if (subIdx === -1) {
+    res.status(404).json({ error: 'Работа не найдена.' });
+    return;
+  }
+
+  const submission = db.submissions[subIdx];
+  const part = taskNumber === 1 ? submission.task1 : submission.task2;
+  if (!part) {
+    res.status(404).json({ error: 'Эта часть задания отсутствует в данной работе.' });
+    return;
+  }
+
+  const taskObj = db.tasks.find((t) => t.id === part.taskId);
+  if (!taskObj) {
+    res.status(404).json({ error: 'Исходное задание не найдено в библиотеке.' });
+    return;
+  }
+
+  const latestRevision = part.revisions[part.revisions.length - 1];
+
+  initSseResponse(res);
+
+  let clientClosed = false;
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      clientClosed = true;
+    }
+  });
+
+  const startedAt = Date.now();
+  let lastProgress: AnalysisProgressEvent = {
+    percent: 5,
+    stageKey: 'connect',
+    stage: 'Подготовка сравнения версий',
+    detail: 'Отправляем исходную и обновлённую редакции в Gemini…',
+    taskNumber,
+    taskStepLabel: `Редакция v${part.revisions.length + 1}`,
+    charsReceived: 0,
+    annotationsDetected: 0,
+    elapsedSec: 0,
+    estimatedRemainingSec: null,
+  };
+
+  const emitProgress = (evt: AnalysisProgressEvent) => {
+    lastProgress = evt;
+    if (!clientClosed) {
+      writeSseEvent(res, 'progress', evt);
+    }
+  };
+
+  emitProgress(lastProgress);
+
+  const heartbeat = setInterval(() => {
+    if (clientClosed || res.writableEnded) return;
+    const elapsedMs = Date.now() - startedAt;
+    const nextPercent =
+      lastProgress.stageKey === 'connect' && lastProgress.percent < 11
+        ? lastProgress.percent + 1
+        : lastProgress.percent;
+    emitProgress({
+      ...lastProgress,
+      percent: nextPercent,
+      elapsedSec: Math.floor(elapsedMs / 1000),
+      estimatedRemainingSec: computeEtaSeconds(nextPercent, elapsedMs),
+    });
+  }, 900);
+
+  try {
+    const newEval = await checkRevisionStreamWithAI(
+      taskObj,
+      latestRevision.essayText,
+      latestRevision.evaluation,
+      revisedText,
+      db.settings,
+      (update) => {
+        const elapsedMs = Date.now() - startedAt;
+        const clamped = Math.max(lastProgress.percent, Math.min(95, update.percent));
+        emitProgress({
+          ...update,
+          percent: clamped,
+          taskNumber,
+          taskStepLabel: `Редакция v${part.revisions.length + 1}`,
+          elapsedSec: Math.floor(elapsedMs / 1000),
+          estimatedRemainingSec: computeEtaSeconds(clamped, elapsedMs),
+        });
+      }
+    );
+
+    emitProgress({
+      ...lastProgress,
+      percent: 97,
+      stageKey: 'saving',
+      stage: 'Сохранение новой редакции',
+      detail: 'Пересчитываем общий балл и обновляем журнал ошибок…',
+      elapsedSec: Math.floor((Date.now() - startedAt) / 1000),
+      estimatedRemainingSec: 1,
+    });
+
+    const latestDb = readDb();
+    const freshIdx = latestDb.submissions.findIndex((s) => s.id === id);
+    if (freshIdx === -1) {
+      throw new Error('Работа не найдена при сохранении.');
+    }
+    const freshSub = latestDb.submissions[freshIdx];
+    const freshPart = taskNumber === 1 ? freshSub.task1 : freshSub.task2;
+    if (!freshPart) {
+      throw new Error('Часть задания не найдена при сохранении.');
+    }
+
+    freshPart.revisions.push({
+      version: freshPart.revisions.length + 1,
+      essayText: revisedText,
+      wordCount: countWords(revisedText),
+      createdAt: new Date().toISOString(),
+      evaluation: newEval,
+    });
+
+    if (freshSub.task1 && freshSub.task2) {
+      const t1Latest = freshSub.task1.revisions[freshSub.task1.revisions.length - 1];
+      const t2Latest = freshSub.task2.revisions[freshSub.task2.revisions.length - 1];
+      freshSub.overallWritingBand = calculateOverallWritingBand(
+        t1Latest.evaluation.taskBand,
+        t2Latest.evaluation.taskBand
+      );
+    }
+
+    freshSub.updatedAt = new Date().toISOString();
+    latestDb.submissions[freshIdx] = freshSub;
+    latestDb.errorJournal = rebuildErrorJournal(latestDb.submissions, latestDb.errorJournal);
+    writeDb(latestDb);
+
+    emitProgress({
+      ...lastProgress,
+      percent: 100,
+      stageKey: 'done',
+      stage: 'Повторная проверка завершена',
+      detail: 'Отчёт по новой редакции готов.',
+      elapsedSec: Math.floor((Date.now() - startedAt) / 1000),
+      estimatedRemainingSec: 0,
+    });
+
+    if (!clientClosed) {
+      writeSseEvent(res, 'done', {
+        submission: freshSub,
+        errorJournal: latestDb.errorJournal,
+      });
+    }
+    res.end();
+  } catch (err) {
+    const formatted = formatGeminiError(err);
+    if (!clientClosed) {
+      writeSseEvent(res, 'error', { error: formatted.message, status: formatted.status });
+    }
+    res.end();
+  } finally {
+    clearInterval(heartbeat);
   }
 });
 

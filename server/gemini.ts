@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import type {
+  AIHealthStatus,
+  AnalysisProgressEvent,
   ErrorJournalEntry,
   EvaluationSettings,
   IeltsFormat,
@@ -11,6 +13,177 @@ import type {
   WritingTask,
 } from '../src/types/ielts.ts';
 import { updateEvaluationWithServerAnchors } from './store.ts';
+
+const GEMINI_MODEL = 'gemini-4-hydrogen';
+
+let activeAiRequests = 0;
+let lastSuccessAt: string | null = null;
+let lastErrorMessage: string | null = null;
+let lastLatencyMs: number | null = null;
+let lastProbeAtMs = 0;
+let lastProbeStatus: AIHealthStatus['status'] = 'online';
+let lastProbeMessage = 'Соединение с Gemini API готово к проверке работ.';
+
+async function trackAiCall<T>(fn: () => Promise<T>): Promise<T> {
+  activeAiRequests += 1;
+  const startedAt = Date.now();
+  try {
+    const result = await fn();
+    lastLatencyMs = Date.now() - startedAt;
+    lastSuccessAt = new Date().toISOString();
+    lastErrorMessage = null;
+    lastProbeStatus = 'online';
+    lastProbeMessage = 'Соединение с Gemini API стабильно.';
+    lastProbeAtMs = Date.now();
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    lastErrorMessage = msg;
+    if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+      lastProbeStatus = 'degraded';
+      lastProbeMessage = 'Высокая нагрузка на Gemini API. Возможны задержки.';
+    } else if (msg.includes('GEMINI_API_KEY')) {
+      lastProbeStatus = 'unconfigured';
+      lastProbeMessage = 'Серверный ключ GEMINI_API_KEY не настроен.';
+    } else {
+      lastProbeStatus = 'offline';
+      lastProbeMessage = 'Не удалось подтвердить соединение с Gemini API.';
+    }
+    throw err;
+  } finally {
+    activeAiRequests = Math.max(0, activeAiRequests - 1);
+  }
+}
+
+export async function checkGeminiApiHealth(forceProbe = false): Promise<AIHealthStatus> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    return {
+      status: 'unconfigured',
+      configured: false,
+      model: GEMINI_MODEL,
+      activeRequests: activeAiRequests,
+      latencyMs: null,
+      checkedAt: new Date().toISOString(),
+      lastSuccessAt,
+      message: 'Серверный ключ GEMINI_API_KEY не настроен в Secrets.',
+    };
+  }
+
+  const nowMs = Date.now();
+  const shouldProbe = forceProbe || nowMs - lastProbeAtMs > 45_000 || lastProbeAtMs === 0;
+
+  if (shouldProbe) {
+    const probeStart = Date.now();
+    try {
+      const ai = getGeminiClient();
+      await ai.models.get({ model: GEMINI_MODEL });
+      lastLatencyMs = Date.now() - probeStart;
+      lastSuccessAt = new Date().toISOString();
+      lastErrorMessage = null;
+      lastProbeStatus = 'online';
+      lastProbeMessage = 'Gemini API подключён и отвечает в штатном режиме.';
+      lastProbeAtMs = Date.now();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      lastLatencyMs = Date.now() - probeStart;
+      lastErrorMessage = msg;
+      lastProbeAtMs = Date.now();
+      if (
+        msg.includes('503') ||
+        msg.includes('UNAVAILABLE') ||
+        msg.includes('429') ||
+        msg.includes('RESOURCE_EXHAUSTED')
+      ) {
+        lastProbeStatus = 'degraded';
+        lastProbeMessage = 'Сервис Gemini временно испытывает повышенную нагрузку.';
+      } else {
+        lastProbeStatus = 'offline';
+        lastProbeMessage =
+          msg.includes('403') || msg.includes('API_KEY_INVALID')
+            ? 'Отклонён ключ Gemini API (проверьте права и корректность ключа).'
+            : 'Нет ответа от Gemini API. Проверьте сетевое подключение.';
+      }
+    }
+  }
+
+  const currentStatus: AIHealthStatus['status'] =
+    activeAiRequests > 0 ? 'processing' : lastProbeStatus;
+
+  const message =
+    activeAiRequests > 0
+      ? `Выполняется ИИ-обработка запросов (${activeAiRequests}).`
+      : lastErrorMessage && lastProbeStatus !== 'online'
+      ? lastProbeMessage
+      : lastProbeMessage;
+
+  return {
+    status: currentStatus,
+    configured: true,
+    model: GEMINI_MODEL,
+    activeRequests: activeAiRequests,
+    latencyMs: lastLatencyMs,
+    checkedAt: new Date(lastProbeAtMs || Date.now()).toISOString(),
+    lastSuccessAt,
+    message,
+  };
+}
+
+export type GeminiProgressUpdate = Omit<
+  AnalysisProgressEvent,
+  'elapsedSec' | 'estimatedRemainingSec' | 'taskNumber' | 'taskStepLabel'
+>;
+
+export type GeminiProgressCallback = (update: GeminiProgressUpdate) => void;
+
+function computeStreamProgress(
+  rawText: string,
+  isRevision: boolean
+): GeminiProgressUpdate {
+  const charsReceived = rawText.length;
+  const annotationsDetected = (rawText.match(/"originalPhrase"\s*:/g) ?? []).length;
+
+  // Adaptive smooth progress curve from 14% up to 88% as JSON streams in
+  const scaleChars = isRevision ? 2600 : 2200;
+  const percent = Math.min(
+    88,
+    Math.max(14, Math.round(14 + 74 * (1 - Math.exp(-charsReceived / scaleChars))))
+  );
+
+  let stageKey: GeminiProgressUpdate['stageKey'] = 'connect';
+  let stage = 'Анализ структуры и содержания ответа';
+  let detail = 'Модель Gemini анализирует ваш текст…';
+
+  if (rawText.includes('"revisionDiff"')) {
+    stageKey = 'revision_diff';
+    stage = 'Сравнение с предыдущей версией';
+    detail = 'Сопоставляем исправленные ошибки, оставшиеся замечания и изменение Band Score…';
+  } else if (rawText.includes('"annotations"')) {
+    stageKey = 'annotations';
+    stage = 'Разметка ошибок и минимальных исправлений';
+    detail =
+      annotationsDetected > 0
+        ? `Найдено фрагментов для точечной правки: ${annotationsDetected}`
+        : 'Выделяем точные фразы и формируем правила…';
+  } else if (rawText.includes('"contentChecklist"')) {
+    stageKey = 'checklist';
+    stage = 'Проверка выполнения условий задания';
+    detail = 'Проверяем раскрытие всех пунктов задания и точность аргументов…';
+  } else if (rawText.includes('"criteria"') || rawText.includes('"summary"')) {
+    stageKey = 'criteria';
+    stage = 'Оценка по 4 официальным критериям IELTS';
+    detail = 'Рассчитываем баллы по Task Achievement / Response, Coherence, Lexical и Grammar…';
+  }
+
+  return {
+    percent,
+    stageKey,
+    stage,
+    detail,
+    charsReceived,
+    annotationsDetected,
+  };
+}
 
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -41,6 +214,53 @@ async function withTransientRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Pro
         msg.includes('ECONNRESET') ||
         msg.includes('ETIMEDOUT');
       if (!isTransient || attempt === maxAttempts) {
+        throw err;
+      }
+      const delayMs = 700 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 250);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
+
+async function collectStreamWithRetry(
+  createStream: () => ReturnType<GoogleGenAI['models']['generateContentStream']>,
+  isRevision: boolean,
+  onProgress?: GeminiProgressCallback
+): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let rawText = '';
+    let receivedAnyChunk = false;
+    let lastEmitAt = 0;
+    try {
+      const stream = await createStream();
+      for await (const chunk of stream) {
+        const piece = chunk.text ?? '';
+        if (!piece) continue;
+        receivedAnyChunk = true;
+        rawText += piece;
+        if (onProgress) {
+          const now = Date.now();
+          if (now - lastEmitAt >= 120 || rawText.length === piece.length) {
+            lastEmitAt = now;
+            onProgress(computeStreamProgress(rawText, isRevision));
+          }
+        }
+      }
+      if (onProgress && rawText.length > 0) {
+        onProgress(computeStreamProgress(rawText, isRevision));
+      }
+      return rawText.trim() || '{}';
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const isTransient =
+        msg.includes('503') ||
+        msg.includes('UNAVAILABLE') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('ETIMEDOUT');
+      if (receivedAnyChunk || !isTransient || attempt === 3) {
         throw err;
       }
       const delayMs = 700 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 250);
@@ -235,10 +455,11 @@ CORE PEDAGOGICAL PRINCIPLE — MINIMAL CORRECTION ONLY:
 8. Include a short multiple-choice "practice" mini-exercise for key annotations so the learner can immediately reinforce the rule.`;
 }
 
-export async function evaluateEssayWithAI(
+export async function evaluateEssayStreamWithAI(
   task: WritingTask,
   essayText: string,
-  settings: EvaluationSettings
+  settings: EvaluationSettings,
+  onProgress?: GeminiProgressCallback
 ): Promise<TaskEvaluation> {
   const ai = getGeminiClient();
   const chartData = buildChartContextString(task);
@@ -265,30 +486,61 @@ ${essayText}
 
   const parts = imagePart ? [imagePart, { text: textPrompt }] : [{ text: textPrompt }];
 
-  const response = await withTransientRetry(() =>
-    ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
-      contents: { parts },
-      config: {
-        systemInstruction: buildExaminerSystemPrompt(task, settings),
-        responseMimeType: 'application/json',
-        responseSchema: EVALUATION_RESPONSE_SCHEMA,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      },
-    })
+  onProgress?.({
+    percent: 6,
+    stageKey: 'connect',
+    stage: 'Подключение к модели Gemini',
+    detail: 'Передаём задание и текст ответа на проверку эксперту ИИ…',
+    charsReceived: 0,
+    annotationsDetected: 0,
+  });
+
+  const rawText = await trackAiCall(() =>
+    collectStreamWithRetry(
+      () =>
+        ai.models.generateContentStream({
+          model: GEMINI_MODEL,
+          contents: { parts },
+          config: {
+            systemInstruction: buildExaminerSystemPrompt(task, settings),
+            responseMimeType: 'application/json',
+            responseSchema: EVALUATION_RESPONSE_SCHEMA,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          },
+        }),
+      false,
+      onProgress
+    )
   );
 
-  const rawText = (response.text ?? '{}').trim();
+  onProgress?.({
+    percent: 92,
+    stageKey: 'anchoring',
+    stage: 'Точная привязка выделений к тексту',
+    detail: 'Проверяем позиции фрагментов и нормализуем оценки по 4 критериям…',
+    charsReceived: rawText.length,
+    annotationsDetected: (rawText.match(/"originalPhrase"\s*:/g) ?? []).length,
+  });
+
   const parsed = JSON.parse(rawText) as TaskEvaluation;
   return updateEvaluationWithServerAnchors(essayText, parsed);
 }
 
-export async function checkRevisionWithAI(
+export async function evaluateEssayWithAI(
+  task: WritingTask,
+  essayText: string,
+  settings: EvaluationSettings
+): Promise<TaskEvaluation> {
+  return evaluateEssayStreamWithAI(task, essayText, settings);
+}
+
+export async function checkRevisionStreamWithAI(
   task: WritingTask,
   originalEssay: string,
   previousEval: TaskEvaluation,
   revisedEssay: string,
-  settings: EvaluationSettings
+  settings: EvaluationSettings,
+  onProgress?: GeminiProgressCallback
 ): Promise<TaskEvaluation> {
   const ai = getGeminiClient();
   const chartData = buildChartContextString(task);
@@ -339,26 +591,58 @@ Important: Return full evaluation + annotations strictly anchored to <student_es
 
   const parts = imagePart ? [imagePart, { text: textPrompt }] : [{ text: textPrompt }];
 
-  const response = await withTransientRetry(() =>
-    ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
-      contents: { parts },
-      config: {
-        systemInstruction: buildExaminerSystemPrompt(task, settings),
-        responseMimeType: 'application/json',
-        responseSchema: revisionSchema,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      },
-    })
+  onProgress?.({
+    percent: 6,
+    stageKey: 'connect',
+    stage: 'Подключение к модели Gemini',
+    detail: 'Сравниваем исправленную редакцию с предыдущей версией…',
+    charsReceived: 0,
+    annotationsDetected: 0,
+  });
+
+  const rawText = await trackAiCall(() =>
+    collectStreamWithRetry(
+      () =>
+        ai.models.generateContentStream({
+          model: GEMINI_MODEL,
+          contents: { parts },
+          config: {
+            systemInstruction: buildExaminerSystemPrompt(task, settings),
+            responseMimeType: 'application/json',
+            responseSchema: revisionSchema,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          },
+        }),
+      true,
+      onProgress
+    )
   );
 
-  const rawText = (response.text ?? '{}').trim();
+  onProgress?.({
+    percent: 92,
+    stageKey: 'anchoring',
+    stage: 'Привязка замечаний и расчёт прогресса',
+    detail: 'Фиксируем исправленные ошибки и обновляем Band Score…',
+    charsReceived: rawText.length,
+    annotationsDetected: (rawText.match(/"originalPhrase"\s*:/g) ?? []).length,
+  });
+
   const parsed = JSON.parse(rawText) as TaskEvaluation;
   const anchored = updateEvaluationWithServerAnchors(revisedEssay, parsed);
   if (anchored.revisionDiff) {
     anchored.revisionDiff.bandDelta = Number((anchored.taskBand - previousEval.taskBand).toFixed(1));
   }
   return anchored;
+}
+
+export async function checkRevisionWithAI(
+  task: WritingTask,
+  originalEssay: string,
+  previousEval: TaskEvaluation,
+  revisedEssay: string,
+  settings: EvaluationSettings
+): Promise<TaskEvaluation> {
+  return checkRevisionStreamWithAI(task, originalEssay, previousEval, revisedEssay, settings);
 }
 
 export async function classifyCustomTopicWithAI(params: {
@@ -415,17 +699,19 @@ If an image is attached, verify whether its labels/numbers are legible. If not l
 
   const parts = imagePart ? [imagePart, { text: textPrompt }] : [{ text: textPrompt }];
 
-  const response = await withTransientRetry(() =>
-    ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
-      contents: { parts },
-      config: {
-        systemInstruction: 'You classify IELTS Writing prompts accurately. Return valid JSON matching the schema. Write imageNote in Russian.',
-        responseMimeType: 'application/json',
-        responseSchema: schema,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      },
-    })
+  const response = await trackAiCall(() =>
+    withTransientRetry(() =>
+      ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: { parts },
+        config: {
+          systemInstruction: 'You classify IELTS Writing prompts accurately. Return valid JSON matching the schema. Write imageNote in Russian.',
+          responseMimeType: 'application/json',
+          responseSchema: schema,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        },
+      })
+    )
   );
 
   const parsed = JSON.parse((response.text ?? '{}').trim());
@@ -487,17 +773,19 @@ export async function generatePersonalizedExercisesWithAI(
       ? 'Write prompt and explanation in clear English.'
       : 'Write prompt and explanation in Russian, while keeping IELTS practice sentences and options in natural academic English.';
 
-  const response = await withTransientRetry(() =>
-    ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
-      contents: `Create 6 targeted IELTS Writing micro-exercises based on this student's recurring error profile:\n${summary}\n\n${langRule}\n\nexerciseType must be one of: sentence_correction, article_choice, preposition_fit, collocation, topic_sentence, argument_development. Provide 4 clear options per question.`,
-      config: {
-        systemInstruction: 'You are an expert IELTS Writing tutor designing concise diagnostic practice drills. Ensure exact alignment between targetSubRule/category and the student profile.',
-        responseMimeType: 'application/json',
-        responseSchema: schema,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      },
-    })
+  const response = await trackAiCall(() =>
+    withTransientRetry(() =>
+      ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: `Create 6 targeted IELTS Writing micro-exercises based on this student's recurring error profile:\n${summary}\n\n${langRule}\n\nexerciseType must be one of: sentence_correction, article_choice, preposition_fit, collocation, topic_sentence, argument_development. Provide 4 clear options per question.`,
+        config: {
+          systemInstruction: 'You are an expert IELTS Writing tutor designing concise diagnostic practice drills. Ensure exact alignment between targetSubRule/category and the student profile.',
+          responseMimeType: 'application/json',
+          responseSchema: schema,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        },
+      })
+    )
   );
 
   const parsed = JSON.parse((response.text ?? '[]').trim()) as Array<Omit<PersonalizedExercise, 'id'>>;

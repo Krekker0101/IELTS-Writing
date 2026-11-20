@@ -10,6 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import type { IeltsFormat, TaskNumber, TaskTypeLabel, WritingTask } from '../types/ielts';
+import { useAIStatus } from '../contexts/AIStatusContext';
 
 interface MyTopicsViewProps {
   tasks: WritingTask[];
@@ -67,6 +68,7 @@ export const MyTopicsView: React.FC<MyTopicsViewProps> = ({
   onTopicDeleted,
   onStartTask,
 }) => {
+  const { beginProcessing, endProcessing } = useAIStatus();
   const customTopics = tasks.filter((t) => t.isCustom);
 
   const [format, setFormat] = useState<IeltsFormat>('academic');
@@ -119,6 +121,7 @@ export const MyTopicsView: React.FC<MyTopicsViewProps> = ({
     }
     setErrorMsg(null);
     setIsClassifying(true);
+    beginProcessing('Определение формата задания');
     try {
       const res = await fetch('/api/ai/classify-topic', {
         method: 'POST',
@@ -162,6 +165,7 @@ export const MyTopicsView: React.FC<MyTopicsViewProps> = ({
       setErrorMsg(err instanceof Error ? err.message : 'Не удалось классифицировать тему.');
     } finally {
       setIsClassifying(false);
+      endProcessing();
     }
   };
 

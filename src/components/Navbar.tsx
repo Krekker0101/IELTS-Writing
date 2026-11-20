@@ -1,4 +1,5 @@
 import React from 'react';
+import { AIStatusIndicator } from './AIStatusIndicator';
 
 export type AppRoute =
   | 'home'
@@ -59,8 +60,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentRoute, onNavigate }) => {
           })}
         </nav>
 
-        {/* Zone 3: Single primary action */}
-        <div className="flex items-center shrink-0">
+        {/* Zone 3: AI Status Indicator + Single primary action */}
+        <div className="flex items-center gap-3 shrink-0">
+          <AIStatusIndicator />
           <button
             type="button"
             onClick={() => onNavigate('mock')}

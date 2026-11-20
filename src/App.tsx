@@ -15,8 +15,9 @@ import { ReportView } from './components/ReportView';
 import { MyTopicsView } from './components/MyTopicsView';
 import { ProgressView } from './components/ProgressView';
 import { AdminView } from './components/AdminView';
+import { AIStatusProvider } from './contexts/AIStatusContext';
 
-export default function App() {
+function AppShell() {
   const [db, setDb] = useState<AppDatabase | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -310,5 +311,13 @@ export default function App() {
         </footer>
       )}
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AIStatusProvider>
+      <AppShell />
+    </AIStatusProvider>
   );
 }
