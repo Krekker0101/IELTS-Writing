@@ -25,7 +25,10 @@ export const MockTestListView: React.FC<MockTestListViewProps> = ({
 
   return (
     <div className="max-w-[1240px] mx-auto px-6 py-10 space-y-8">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+      <div
+        data-onboarding="mock-test-list-view"
+        className="flex flex-col md:flex-row md:items-end justify-between gap-4 rounded-2xl p-2 -m-2"
+      >
         <div>
           <p className="text-xs font-medium text-slate-500">
             60 минут · Единый таймер · Task 2 имеет двойной вес

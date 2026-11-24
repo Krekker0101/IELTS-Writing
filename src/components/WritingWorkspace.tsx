@@ -5,7 +5,10 @@ import {
   BookOpen,
   Clock,
   Loader2,
+  Lock,
+  Maximize2,
   Send,
+  ShieldCheck,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
@@ -21,8 +24,10 @@ import type {
 import { TaskVisual } from './TaskVisual';
 import { AnalysisProgressPanel } from './AnalysisProgressPanel';
 import { AIStatusIndicator } from './AIStatusIndicator';
+import { FocusLockOverlay } from './FocusLockOverlay';
 import { useAIStatus } from '../contexts/AIStatusContext';
 import { postSseStream } from '../utils/sseClient';
+import { useScreenLock } from '../hooks/useScreenLock';
 
 export interface ActiveSessionConfig {
   sessionType: 'mock' | 'single';
@@ -33,6 +38,7 @@ export interface ActiveSessionConfig {
   task2?: WritingTask;
   timerMinutes: number | null;
   draftKey: string;
+  enteredFullscreen?: boolean;
 }
 
 interface WritingWorkspaceProps {
@@ -73,17 +79,40 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
     return local ?? initialDraft?.task2Text ?? '';
   });
 
-  const initialSec =
-    session.timerMinutes !== null
-      ? initialDraft?.remainingSeconds && initialDraft.remainingSeconds > 0
-        ? initialDraft.remainingSeconds
-        : session.timerMinutes * 60
-      : 0;
+  const initialSec = useMemo(() => {
+    if (session.timerMinutes === null) return 0;
+    const total = session.timerMinutes * 60;
+    if (initialDraft?.startedAtIso) {
+      const elapsedSinceStart = Math.floor(
+        (Date.now() - new Date(initialDraft.startedAtIso).getTime()) / 1000
+      );
+      if (Number.isFinite(elapsedSinceStart) && elapsedSinceStart > 0) {
+        return Math.max(0, total - elapsedSinceStart);
+      }
+    }
+    return initialDraft?.remainingSeconds && initialDraft.remainingSeconds > 0
+      ? initialDraft.remainingSeconds
+      : total;
+  }, [session.timerMinutes, initialDraft]);
 
   const [secondsLeft, setSecondsLeft] = useState<number>(initialSec);
   const [elapsedSec, setElapsedSec] = useState<number>(0);
   const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved');
   const [showHints, setShowHints] = useState<boolean>(session.mode === 'learning');
+  const isExamOrMock = session.mode === 'mock' || session.mode === 'exam';
+  const {
+    isStrictEnabled: strictFocusEnabled,
+    isLocked: isFocusLocked,
+    lockReason: focusLockReason,
+    focusEvents,
+    lockStatus,
+    engageScreenLock: engageStrictFocus,
+    releaseScreenLock,
+  } = useScreenLock({
+    initialEnabled: Boolean(isExamOrMock || session.enteredFullscreen),
+    lockPromptCopy: true,
+  });
+  const focusViolations = focusEvents.length;
   const { beginProcessing, updateProcessing, endProcessing } = useAIStatus();
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgressEvent | null>(null);
@@ -168,6 +197,7 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
         format: session.format,
         mockTestId: session.mockTest?.id,
         draftKey: session.draftKey,
+        focusEvents,
       };
 
       if (session.task1 && task1Text.trim()) {
@@ -202,6 +232,7 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
 
       localStorage.removeItem(`draft_${session.draftKey}_t1`);
       localStorage.removeItem(`draft_${session.draftKey}_t2`);
+      releaseScreenLock(true);
       onCompleted(data.submission);
     } catch (err) {
       setErrorMsg(
@@ -226,7 +257,10 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
           <div className="flex items-center gap-4 min-w-0">
             <button
               type="button"
-              onClick={onExit}
+              onClick={() => {
+                releaseScreenLock(true);
+                onExit();
+              }}
               className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 cursor-pointer whitespace-nowrap shrink-0"
             >
               <ArrowLeft className="w-4 h-4" />
@@ -304,6 +338,25 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
               </div>
             )}
 
+            {!strictFocusEnabled ? (
+              <button
+                type="button"
+                onClick={engageStrictFocus}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+                Screen Lock
+              </button>
+            ) : (
+              <span
+                title={`Fullscreen: ${lockStatus.fullscreenActive ? 'ON' : 'OFF'} · Wake Lock: ${lockStatus.wakeLockActive ? 'ON' : 'OFF'} · Keyboard Lock: ${lockStatus.keyboardLocked ? 'ON' : 'Fallback'}`}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 whitespace-nowrap shrink-0"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                Screen Lock активен
+              </span>
+            )}
+
             <button
               type="button"
               onClick={handleSubmit}
@@ -327,6 +380,29 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
           </div>
         </div>
       </div>
+
+      <FocusLockOverlay
+        visible={strictFocusEnabled && isFocusLocked}
+        reason={focusLockReason}
+        violationCount={focusViolations}
+        sessionTitle={session.mockTest ? session.mockTest.title : currentTask.title}
+        onUnlockAndReenterFullscreen={engageStrictFocus}
+        onEmergencyExit={() => {
+          releaseScreenLock(true);
+          onExit();
+        }}
+      />
+
+      {strictFocusEnabled && focusViolations > 0 && !isFocusLocked && (
+        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2">
+          <div className="max-w-[1360px] mx-auto flex flex-wrap items-center justify-between gap-3 text-xs text-amber-900">
+            <span className="inline-flex items-center gap-2 font-medium">
+              <Lock className="w-3.5 h-3.5 text-amber-700" />
+              Screen Lock активен · Зафиксировано выходов из окна: {focusViolations}
+            </span>
+          </div>
+        </div>
+      )}
 
       {errorMsg && (
         <div className="max-w-[1360px] w-full mx-auto px-6 pt-4">
@@ -443,6 +519,8 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
             </div>
           </div>
 
+          {isSubmitting && <AnalysisProgressPanel progress={analysisProgress} />}
+
           <textarea
             value={currentText}
             onChange={(e) => {
@@ -458,8 +536,6 @@ export const WritingWorkspace: React.FC<WritingWorkspaceProps> = ({
             disabled={isSubmitting}
             className="flex-1 w-full p-6 text-[15px] leading-[1.75] text-slate-900 placeholder:text-slate-400 resize-none focus:outline-none bg-white"
           />
-
-          {isSubmitting && <AnalysisProgressPanel progress={analysisProgress} />}
         </div>
       </div>
     </div>

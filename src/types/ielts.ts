@@ -208,6 +208,8 @@ export interface Submission {
   task1?: TaskSubmissionPart;
   task2?: TaskSubmissionPart;
   overallWritingBand?: number;
+  focusEvents?: FocusEventRecord[];
+  sessionIntegrity?: 'standard' | 'interrupted';
 }
 
 export interface ErrorExampleRecord {
@@ -246,6 +248,20 @@ export interface PersonalizedExercise {
   answeredCorrectly?: boolean;
 }
 
+export interface VocabularyFlashcard {
+  id: string;
+  term: string;
+  translationOrMeaning: string;
+  exampleSentence: string;
+  originalMistake: string;
+  correctionTip: string;
+  sourceModule: 'writing' | 'speaking';
+  sourceCategory: string;
+  mastered: boolean;
+  reviewCount: number;
+  createdAt: string;
+}
+
 export interface ComplaintRecord {
   id: string;
   submissionId: string;
@@ -270,7 +286,184 @@ export interface DraftEntry {
   task1Text: string;
   task2Text: string;
   remainingSeconds: number;
+  startedAtIso?: string;
   updatedAt: string;
+}
+
+export type SpeakingPartNumber = 1 | 2 | 3;
+export type SpeakingMode = 'exam' | 'practice' | 'coaching';
+export type CoachPersona = 'classic' | 'strict' | 'supportive';
+export type CoachVoiceName = 'Kore' | 'Puck' | 'Charon' | 'Fenrir' | 'Zephyr';
+export type CoachVisualState =
+  | 'idle'
+  | 'listening'
+  | 'thinking'
+  | 'speaking'
+  | 'encouraging'
+  | 'celebrating'
+  | 'teasing'
+  | 'angry_fire'
+  | 'calming_down'
+  | 'neutral_examiner'
+  | 'reconnecting';
+
+export interface SpeakingQuestionItem {
+  id: string;
+  text: string;
+  source: 'user' | 'ai' | 'platform';
+}
+
+export interface SpeakingCueCard {
+  prompt: string;
+  bullets: string[];
+}
+
+export interface SpeakingTopic {
+  id: string;
+  title: string;
+  description: string;
+  part: SpeakingPartNumber;
+  difficulty: 'Band 6.0' | 'Band 7.0' | 'Band 8.0+';
+  tags: string[];
+  isCustom: boolean;
+  sourceLabel: 'Авторское задание платформы' | 'Официальный пример' | 'Моя тема';
+  questions: SpeakingQuestionItem[];
+  cueCard?: SpeakingCueCard;
+  linkedPart3TopicId?: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface SpeakingMockTest {
+  id: string;
+  title: string;
+  description: string;
+  difficulty: 'Band 6.0' | 'Band 7.0' | 'Band 8.0+';
+  part1TopicId: string;
+  part2TopicId: string;
+  part3TopicId: string;
+  totalMinutes: number;
+  createdAt: string;
+}
+
+export interface SpeakingTurnAnnotation {
+  id: string;
+  startSec: number;
+  endSec: number;
+  wordOrPhrase: string;
+  minimalCorrection: string;
+  category: 'Fluency' | 'Lexical Resource' | 'Grammar' | 'Pronunciation';
+  subRule: string;
+  severity: 'error' | 'suggestion' | 'uncertain_transcription';
+  confidence: 'high' | 'medium' | 'low';
+  explanation: string;
+  ieltsImpact: string;
+  tip: string;
+  pronunciationTarget?: string;
+  repeatDrillPhrase?: string;
+}
+
+export interface FluencySignals {
+  estimatedWpm: number;
+  longPausesCount: number;
+  fillerWordsCount: number;
+  selfCorrectionsCount: number;
+  repetitionsCount: number;
+}
+
+export interface SpeakingTurnRecord {
+  id: string;
+  part: SpeakingPartNumber;
+  questionText: string;
+  audioDataUrl?: string;
+  durationSec: number;
+  transcript: string;
+  uncertainWords: string[];
+  fluencySignals: FluencySignals;
+  annotations: SpeakingTurnAnnotation[];
+  examinerNote?: string;
+}
+
+export interface SpeakingEvaluation {
+  speakingBand: number;
+  isPartialPractice: boolean;
+  criteria: CriterionAssessment[];
+  summary: string;
+  strengths: string[];
+  topPriorities: string[];
+  nextRecommendedExercise: string;
+  coachObservation?: string;
+  uncertaintyNote?: string;
+}
+
+export interface FocusEventRecord {
+  type: 'fullscreen_exit' | 'tab_hidden' | 'window_blur';
+  at: string;
+  durationSec?: number;
+}
+
+export interface SpeakingSessionRecord {
+  id: string;
+  topicId?: string;
+  mockTestId?: string;
+  title: string;
+  part?: SpeakingPartNumber;
+  isFullMock: boolean;
+  mode: SpeakingMode;
+  createdAt: string;
+  durationSec: number;
+  turns: SpeakingTurnRecord[];
+  evaluation: SpeakingEvaluation;
+  focusEvents: FocusEventRecord[];
+  sessionIntegrity: 'standard' | 'interrupted';
+}
+
+export interface StudyPlanDailyTask {
+  id: string;
+  title: string;
+  module: 'writing' | 'speaking' | 'coach' | 'drill';
+  minutes: number;
+  completed: boolean;
+  targetRoute: string;
+}
+
+export interface UserProfile {
+  name: string;
+  format: IeltsFormat;
+  currentBand?: number;
+  targetBand: number;
+  examDate: string;
+  taperDaysBeforeExam?: 2 | 3;
+  priorityCriteria?: string[];
+  coachPersona: CoachPersona;
+  coachVoice: CoachVoiceName;
+  coachSpeed: number;
+  storeAudioRecordings: boolean;
+  audioRetentionDays: number;
+  dailyGoalMinutes: number;
+  restDays: string[];
+  streakDays: number;
+  xp: number;
+  lastActiveDate: string;
+  completedDailyTaskIds: string[];
+  fontSize: 'normal' | 'large';
+  highContrast: boolean;
+  reducedMotion: boolean;
+  showHeroBanner: boolean;
+  leaderboardUsername?: string;
+  showUsernameOnLeaderboard?: boolean;
+}
+
+export interface LeaderboardEntry {
+  id: string;
+  username?: string;
+  showUsername: boolean;
+  streakDays: number;
+  xp: number;
+  targetBand: number;
+  format: IeltsFormat;
+  lastActiveDate: string;
+  isCurrentUser?: boolean;
 }
 
 export interface AppDatabase {
@@ -279,9 +472,15 @@ export interface AppDatabase {
   submissions: Submission[];
   errorJournal: ErrorJournalEntry[];
   exercises: PersonalizedExercise[];
+  flashcards: VocabularyFlashcard[];
   complaints: ComplaintRecord[];
   drafts: Record<string, DraftEntry>;
   settings: EvaluationSettings;
+  speakingTopics: SpeakingTopic[];
+  speakingMockTests: SpeakingMockTest[];
+  speakingSessions: SpeakingSessionRecord[];
+  userProfile: UserProfile;
+  leaderboard: LeaderboardEntry[];
 }
 
 export interface AnalysisProgressEvent {
@@ -323,5 +522,6 @@ export interface AIHealthStatus {
   lastSuccessAt: string | null;
   message: string;
 }
+
 
 

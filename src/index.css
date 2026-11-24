@@ -1,7 +1,8 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Playfair Display", Georgia, serif;
+  --font-display: "Manrope", system-ui, -apple-system, sans-serif;
+  --font-editorial: "Playfair Display", Georgia, serif;
   --font-sans: "Manrope", system-ui, -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
 }
@@ -9,14 +10,14 @@
 @layer base {
   html {
     font-family: var(--font-sans);
-    background-color: #f8fafc;
+    background-color: #f8f9fb;
     color: #0f172a;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  h1, h2, .font-editorial {
-    font-family: var(--font-display);
+  .font-editorial {
+    font-family: var(--font-editorial);
   }
 }
 
@@ -26,6 +27,130 @@
 
 .text-balance {
   text-wrap: balance;
+}
+
+/* Soft pastel multi-point mesh matching clean modern SaaS hero canvas */
+.hero-pastel-mesh {
+  background-color: #ffffff;
+  background-image:
+    radial-gradient(at 14% 22%, rgba(255, 118, 97, 0.24) 0px, transparent 52%),
+    radial-gradient(at 86% 18%, rgba(214, 178, 255, 0.28) 0px, transparent 52%),
+    radial-gradient(at 18% 84%, rgba(160, 214, 255, 0.28) 0px, transparent 52%),
+    radial-gradient(at 84% 82%, rgba(255, 206, 158, 0.28) 0px, transparent 54%);
+}
+
+/* Accessibility modes */
+.a11y-large-text {
+  font-size: 17px;
+}
+
+.a11y-high-contrast {
+  background-color: #ffffff !important;
+  color: #020617 !important;
+}
+
+.a11y-high-contrast .border-slate-200,
+.a11y-high-contrast .border-slate-100 {
+  border-color: #475569 !important;
+}
+
+.a11y-reduced-motion *,
+.a11y-reduced-motion *::before,
+.a11y-reduced-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+@keyframes coachFireFlicker {
+  0%, 100% {
+    transform: translateY(0px) scaleY(1) scaleX(1);
+    opacity: 0.95;
+  }
+  50% {
+    transform: translateY(-4px) scaleY(1.12) scaleX(0.95);
+    opacity: 1;
+  }
+}
+
+@keyframes coachAngryShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-2.5px) rotate(-1deg); }
+  40% { transform: translateX(2.5px) rotate(1deg); }
+  60% { transform: translateX(-2px) rotate(-0.5deg); }
+  80% { transform: translateX(2px) rotate(0.5deg); }
+}
+
+@keyframes coachCalmBreathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+
+.coach-fire-flicker {
+  animation: coachFireFlicker 0.65s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+.coach-angry-shake {
+  animation: coachAngryShake 0.48s ease-in-out infinite;
+}
+
+.coach-calm-breathe {
+  animation: coachCalmBreathe 2.6s ease-in-out infinite;
+}
+
+@keyframes goalRingPop {
+  0% { transform: scale(0.92); }
+  45% { transform: scale(1.1); }
+  75% { transform: scale(0.98); }
+  100% { transform: scale(1); }
+}
+
+@keyframes goalConfettiBurst {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.4) rotate(0deg);
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--tx, 0px), var(--ty, -32px)) scale(1.05) rotate(var(--rot, 140deg));
+  }
+}
+
+.goal-ring-pop {
+  animation: goalRingPop 0.65s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.goal-confetti-piece {
+  animation: goalConfettiBurst 1.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Vocabulary Flashcard 3D Flip */
+.flip-card-scene {
+  perspective: 1100px;
+}
+
+.flip-card-inner {
+  position: relative;
+  width: 100%;
+  transform-style: preserve-3d;
+  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.flip-card-inner.is-flipped {
+  transform: rotateY(180deg);
+}
+
+.flip-card-face {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.flip-card-face-back {
+  transform: rotateY(180deg);
 }
 
 @media (prefers-reduced-motion: reduce) {

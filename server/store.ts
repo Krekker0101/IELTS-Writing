@@ -3,9 +3,11 @@ import path from 'path';
 import type {
   AppDatabase,
   ErrorJournalEntry,
+  LeaderboardEntry,
   Submission,
   TaskEvaluation,
   TextAnnotation,
+  UserProfile,
 } from '../src/types/ielts.ts';
 import { INITIAL_DB } from './seedData.ts';
 
@@ -34,9 +36,27 @@ export function readDb(): AppDatabase {
       submissions: Array.isArray(parsed.submissions) ? parsed.submissions : [],
       errorJournal: Array.isArray(parsed.errorJournal) ? parsed.errorJournal : [],
       exercises: Array.isArray(parsed.exercises) ? parsed.exercises : [],
+      flashcards: Array.isArray(parsed.flashcards) ? parsed.flashcards : [],
       complaints: Array.isArray(parsed.complaints) ? parsed.complaints : [],
       drafts: parsed.drafts && typeof parsed.drafts === 'object' ? parsed.drafts : {},
       settings: parsed.settings ?? structuredClone(INITIAL_DB.settings),
+      speakingTopics:
+        Array.isArray(parsed.speakingTopics) && parsed.speakingTopics.length > 0
+          ? parsed.speakingTopics
+          : structuredClone(INITIAL_DB.speakingTopics),
+      speakingMockTests:
+        Array.isArray(parsed.speakingMockTests) && parsed.speakingMockTests.length > 0
+          ? parsed.speakingMockTests
+          : structuredClone(INITIAL_DB.speakingMockTests),
+      speakingSessions: Array.isArray(parsed.speakingSessions) ? parsed.speakingSessions : [],
+      userProfile: {
+        ...structuredClone(INITIAL_DB.userProfile),
+        ...(parsed.userProfile ?? {}),
+      },
+      leaderboard:
+        Array.isArray(parsed.leaderboard) && parsed.leaderboard.length > 0
+          ? parsed.leaderboard
+          : structuredClone(INITIAL_DB.leaderboard),
     };
   } catch {
     const fresh = structuredClone(INITIAL_DB);
@@ -159,20 +179,12 @@ export function rebuildErrorJournal(
 
 export function updateEvaluationWithServerAnchors(
   essayText: string,
-  evaluation: TaskEvaluation
+  evaluation: TaskEvaluation,
+  options?: {
+    taskNumber?: 1 | 2;
+    strictness?: 'standard' | 'strict';
+  }
 ): TaskEvaluation {
-  const validCriteria = (evaluation.criteria || []).slice(0, 4).map((c) => ({
-    ...c,
-    band: roundToHalfBand(Number(c.band) || 5.5),
-  }));
-
-  const taskBand =
-    validCriteria.length === 4
-      ? roundToHalfBand(
-          validCriteria.reduce((acc, item) => acc + item.band, 0) / 4
-        )
-      : roundToHalfBand(Number(evaluation.taskBand) || 5.5);
-
   const anchored: TextAnnotation[] = [];
   const occupiedRanges: Array<{ start: number; end: number }> = [];
   let cursorHint = 0;
@@ -219,10 +231,190 @@ export function updateEvaluationWithServerAnchors(
 
   anchored.sort((a, b) => a.startIndex - b.startIndex);
 
+  // Deterministic IELTS sanity guardrails to prevent LLM grade inflation
+  const wordCount = countWords(essayText);
+  const paragraphCount = essayText
+    .trim()
+    .split(/\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean).length;
+  const taskNumber = options?.taskNumber ?? 2;
+  const strictness = options?.strictness ?? 'standard';
+
+  const confirmedErrors = anchored.filter((a) => a.severity === 'error');
+  const grammarErrors = confirmedErrors.filter((a) =>
+    ['Grammar', 'Sentence Structure', 'Punctuation'].includes(a.category)
+  ).length;
+  const lexicalErrors = confirmedErrors.filter((a) =>
+    ['Vocabulary', 'Collocations', 'Spelling', 'Register and Style'].includes(a.category)
+  ).length;
+  const unmetChecklistCount = (evaluation.contentChecklist || []).filter((c) => !c.met).length;
+
+  const normBase = taskNumber === 1 ? 150 : 250;
+  const densityScale = normBase / Math.max(80, wordCount);
+  const scaledGrammar = grammarErrors * densityScale;
+  const scaledLexical = lexicalErrors * densityScale;
+
+  // Compute objective upper bounds per IELTS official descriptors
+  let taskCap = 9.0;
+  if (taskNumber === 1) {
+    if (wordCount < 75) taskCap = Math.min(taskCap, 3.5);
+    else if (wordCount < 115) taskCap = Math.min(taskCap, 4.5);
+    else if (wordCount < 145) taskCap = Math.min(taskCap, 5.5);
+    else if (wordCount < 150) taskCap = Math.min(taskCap, 6.0);
+  } else {
+    if (wordCount < 100) taskCap = Math.min(taskCap, 3.5);
+    else if (wordCount < 165) taskCap = Math.min(taskCap, 4.5);
+    else if (wordCount < 215) taskCap = Math.min(taskCap, 5.5);
+    else if (wordCount < 250) taskCap = Math.min(taskCap, 6.0);
+  }
+  if (unmetChecklistCount >= 3) taskCap = Math.min(taskCap, 4.5);
+  else if (unmetChecklistCount === 2) taskCap = Math.min(taskCap, 5.5);
+  else if (unmetChecklistCount === 1) taskCap = Math.min(taskCap, 6.5);
+
+  let coherenceCap = 9.0;
+  if (wordCount >= 120 && paragraphCount <= 1) {
+    coherenceCap = 5.0;
+  } else if (wordCount >= 180 && paragraphCount <= 2) {
+    coherenceCap = 6.0;
+  }
+  if (wordCount < (taskNumber === 1 ? 90 : 140)) {
+    coherenceCap = Math.min(coherenceCap, 4.5);
+  }
+
+  let grammarCap = 9.0;
+  if (grammarErrors >= 7 || scaledGrammar >= 7.5) grammarCap = 5.5;
+  else if (grammarErrors >= 4 || scaledGrammar >= 4.0) grammarCap = 6.5;
+  else if (grammarErrors >= 2 || scaledGrammar >= 2.0) grammarCap = 7.5;
+
+  let lexicalCap = 9.0;
+  if (lexicalErrors >= 6 || scaledLexical >= 6.0) lexicalCap = 5.5;
+  else if (lexicalErrors >= 3 || scaledLexical >= 3.0) lexicalCap = 6.5;
+  else if (lexicalErrors >= 2 || scaledLexical >= 1.8) lexicalCap = 7.5;
+
+  // Under-length submissions lack sufficient sample to demonstrate Band 6.5+/7.5+ lexis & grammar
+  if (taskNumber === 1) {
+    if (wordCount < 75) {
+      grammarCap = Math.min(grammarCap, 4.5);
+      lexicalCap = Math.min(lexicalCap, 4.5);
+    } else if (wordCount < 115) {
+      grammarCap = Math.min(grammarCap, 5.5);
+      lexicalCap = Math.min(lexicalCap, 5.5);
+    } else if (wordCount < 145) {
+      grammarCap = Math.min(grammarCap, 6.5);
+      lexicalCap = Math.min(lexicalCap, 6.5);
+    }
+  } else {
+    if (wordCount < 100) {
+      grammarCap = Math.min(grammarCap, 4.5);
+      lexicalCap = Math.min(lexicalCap, 4.5);
+    } else if (wordCount < 165) {
+      grammarCap = Math.min(grammarCap, 5.5);
+      lexicalCap = Math.min(lexicalCap, 5.5);
+    } else if (wordCount < 220) {
+      grammarCap = Math.min(grammarCap, 6.5);
+      lexicalCap = Math.min(lexicalCap, 6.5);
+    }
+  }
+
+  const validCriteria = (evaluation.criteria || []).slice(0, 4).map((c) => {
+    let band = roundToHalfBand(Number(c.band) || 5.0);
+    const lowerName = (c.name || '').toLowerCase();
+    if (lowerName.includes('task')) {
+      band = Math.min(band, taskCap);
+    } else if (lowerName.includes('coherence')) {
+      band = Math.min(band, coherenceCap);
+    } else if (lowerName.includes('lexical')) {
+      band = Math.min(band, lexicalCap);
+    } else if (lowerName.includes('gramma')) {
+      band = Math.min(band, grammarCap);
+    }
+    if (strictness === 'strict' && band >= 6.5 && (confirmedErrors.length >= 4 || unmetChecklistCount >= 1)) {
+      band = Math.max(4.0, band - 0.5);
+    }
+    return {
+      ...c,
+      band: roundToHalfBand(band),
+    };
+  });
+
+  let taskBand: number;
+  if (validCriteria.length === 4) {
+    const avg = validCriteria.reduce((acc, item) => acc + item.band, 0) / 4;
+    taskBand =
+      strictness === 'strict'
+        ? roundToHalfBand(Math.floor((avg + 0.05) * 2) / 2)
+        : roundToHalfBand(avg);
+  } else {
+    taskBand = roundToHalfBand(Math.min(Number(evaluation.taskBand) || 5.0, taskCap));
+  }
+
   return {
     ...evaluation,
     taskBand,
     criteria: validCriteria,
     annotations: anchored,
+  };
+}
+
+export function awardStudyXp(profile: UserProfile, earnedXp: number): UserProfile {
+  const today = new Date().toISOString().slice(0, 10);
+  const lastDate = profile.lastActiveDate || '';
+  let streakDays = profile.streakDays || 0;
+  if (lastDate !== today) {
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    streakDays = lastDate === yesterday ? streakDays + 1 : Math.max(1, streakDays);
+  }
+  return {
+    ...profile,
+    xp: (profile.xp || 0) + earnedXp,
+    streakDays,
+    lastActiveDate: today,
+  };
+}
+
+export function buildRankedLeaderboard(
+  db: AppDatabase,
+  overrideStreak?: number,
+  overrideXp?: number
+): {
+  entries: Array<LeaderboardEntry & { rank: number }>;
+  currentUserRank: number;
+  totalParticipants: number;
+} {
+  const peers = db.leaderboard.filter(
+    (entry) => !entry.isCurrentUser && entry.id !== 'current-user'
+  );
+  const showUsername = Boolean(db.userProfile.showUsernameOnLeaderboard);
+  const cleanUsername = (db.userProfile.leaderboardUsername ?? '').trim();
+
+  const currentUserEntry: LeaderboardEntry = {
+    id: 'current-user',
+    username: showUsername ? cleanUsername || db.userProfile.name?.trim() || undefined : undefined,
+    showUsername,
+    streakDays: Math.max(db.userProfile.streakDays || 0, overrideStreak ?? 0),
+    xp: Math.max(db.userProfile.xp || 0, overrideXp ?? 0),
+    targetBand: db.userProfile.targetBand || 7.5,
+    format: db.userProfile.format || 'academic',
+    lastActiveDate: db.userProfile.lastActiveDate || new Date().toISOString().slice(0, 10),
+    isCurrentUser: true,
+  };
+
+  const combined = [...peers, currentUserEntry].sort((a, b) => {
+    if (b.streakDays !== a.streakDays) return b.streakDays - a.streakDays;
+    if (b.xp !== a.xp) return b.xp - a.xp;
+    return b.targetBand - a.targetBand;
+  });
+
+  const ranked = combined.map((entry, idx) => ({
+    ...entry,
+    rank: idx + 1,
+  }));
+
+  const currentUserRow = ranked.find((e) => e.isCurrentUser);
+  return {
+    entries: ranked,
+    currentUserRank: currentUserRow?.rank ?? ranked.length,
+    totalParticipants: ranked.length,
   };
 }

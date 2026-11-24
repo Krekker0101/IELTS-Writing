@@ -5,6 +5,8 @@ import type {
   EvaluationSettings,
   IeltsFormat,
   MockTest,
+  SpeakingMockTest,
+  SpeakingTopic,
   Submission,
   TaskNumber,
   TaskTypeLabel,
@@ -14,6 +16,8 @@ import type {
 interface AdminViewProps {
   tasks: WritingTask[];
   mockTests: MockTest[];
+  speakingTopics?: SpeakingTopic[];
+  speakingMockTests?: SpeakingMockTest[];
   submissions: Submission[];
   complaints: ComplaintRecord[];
   settings: EvaluationSettings;
@@ -21,6 +25,9 @@ interface AdminViewProps {
   onTaskDeleted: (taskId: string) => void;
   onMockCreated: (mock: MockTest) => void;
   onMockDeleted: (mockId: string) => void;
+  onSpeakingTopicDeleted?: (id: string) => void;
+  onSpeakingMockCreated?: (mock: SpeakingMockTest) => void;
+  onSpeakingMockDeleted?: (id: string) => void;
   onComplaintUpdated: (complaint: ComplaintRecord) => void;
   onSettingsUpdated: (settings: EvaluationSettings) => void;
 }
@@ -28,6 +35,8 @@ interface AdminViewProps {
 export const AdminView: React.FC<AdminViewProps> = ({
   tasks,
   mockTests,
+  speakingTopics = [],
+  speakingMockTests = [],
   submissions,
   complaints,
   settings,
@@ -35,10 +44,23 @@ export const AdminView: React.FC<AdminViewProps> = ({
   onTaskDeleted,
   onMockCreated,
   onMockDeleted,
+  onSpeakingTopicDeleted,
+  onSpeakingMockCreated,
+  onSpeakingMockDeleted,
   onComplaintUpdated,
   onSettingsUpdated,
 }) => {
-  const [activeTab, setActiveTab] = useState<'tasks' | 'mocks' | 'complaints' | 'settings'>('tasks');
+  const [activeTab, setActiveTab] = useState<'tasks' | 'mocks' | 'speaking' | 'complaints' | 'settings'>('tasks');
+  const [spkMockTitle, setSpkMockTitle] = useState('');
+  const [spkP1Id, setSpkP1Id] = useState(
+    speakingTopics.find((t) => t.part === 1)?.id ?? ''
+  );
+  const [spkP2Id, setSpkP2Id] = useState(
+    speakingTopics.find((t) => t.part === 2)?.id ?? ''
+  );
+  const [spkP3Id, setSpkP3Id] = useState(
+    speakingTopics.find((t) => t.part === 3)?.id ?? ''
+  );
 
   // New Library Task form
   const [title, setTitle] = useState('');
@@ -223,8 +245,9 @@ export const AdminView: React.FC<AdminViewProps> = ({
       <div className="inline-flex flex-wrap gap-1 p-1 bg-slate-100 rounded-lg">
         {(
           [
-            { id: 'tasks', label: 'Библиотека заданий' },
-            { id: 'mocks', label: 'Mock Tests' },
+            { id: 'tasks', label: 'Writing задания' },
+            { id: 'mocks', label: 'Writing Mock Tests' },
+            { id: 'speaking', label: `Speaking (${speakingTopics.length})` },
             { id: 'complaints', label: `Жалобы на ИИ (${openComplaintsCount})` },
             { id: 'settings', label: 'Настройки проверки' },
           ] as const
@@ -460,6 +483,131 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'speaking' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!spkMockTitle.trim() || !spkP1Id || !spkP2Id || !spkP3Id) return;
+              const res = await fetch('/api/speaking/mock-tests', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  title: spkMockTitle,
+                  part1TopicId: spkP1Id,
+                  part2TopicId: spkP2Id,
+                  part3TopicId: spkP3Id,
+                }),
+              });
+              const data = await res.json();
+              if (res.ok) {
+                onSpeakingMockCreated?.(data as SpeakingMockTest);
+                setSpkMockTitle('');
+              }
+            }}
+            className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-4"
+          >
+            <h2 className="text-base font-semibold text-slate-900">Создать Speaking Mock Test</h2>
+            <input
+              type="text"
+              value={spkMockTitle}
+              onChange={(e) => setSpkMockTitle(e.target.value)}
+              placeholder="Название Speaking Mock Test"
+              className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+            />
+            <select
+              value={spkP1Id}
+              onChange={(e) => setSpkP1Id(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white"
+            >
+              {speakingTopics.filter((t) => t.part === 1).map((t) => (
+                <option key={t.id} value={t.id}>Part 1: {t.title}</option>
+              ))}
+            </select>
+            <select
+              value={spkP2Id}
+              onChange={(e) => setSpkP2Id(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white"
+            >
+              {speakingTopics.filter((t) => t.part === 2).map((t) => (
+                <option key={t.id} value={t.id}>Part 2: {t.title}</option>
+              ))}
+            </select>
+            <select
+              value={spkP3Id}
+              onChange={(e) => setSpkP3Id(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white"
+            >
+              {speakingTopics.filter((t) => t.part === 3).map((t) => (
+                <option key={t.id} value={t.id}>Part 3: {t.title}</option>
+              ))}
+            </select>
+            <button
+              type="submit"
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#FF4B3A] rounded-lg hover:bg-[#e84232] cursor-pointer"
+            >
+              <Plus className="w-4 h-4" /> Создать Speaking Mock
+            </button>
+          </form>
+
+          <div className="lg:col-span-7 space-y-4">
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <p className="px-5 py-3 text-xs font-semibold text-slate-500 bg-slate-50 border-b border-slate-100">
+                Speaking Mock Tests ({speakingMockTests.length})
+              </p>
+              {speakingMockTests.map((m) => (
+                <div
+                  key={m.id}
+                  className="px-5 py-3.5 border-b border-slate-100 last:border-0 flex items-center justify-between gap-4"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{m.title}</p>
+                    <p className="text-xs text-slate-500">{m.difficulty} · ~{m.totalMinutes} мин</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await fetch(`/api/speaking/mock-tests/${m.id}`, { method: 'DELETE' });
+                      if (res.ok) onSpeakingMockDeleted?.(m.id);
+                    }}
+                    className="p-1.5 text-slate-400 hover:text-red-700 cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <p className="px-5 py-3 text-xs font-semibold text-slate-500 bg-slate-50 border-b border-slate-100">
+                Speaking-темы ({speakingTopics.length})
+              </p>
+              {speakingTopics.map((t) => (
+                <div
+                  key={t.id}
+                  className="px-5 py-3 border-b border-slate-100 last:border-0 flex items-center justify-between gap-4"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs text-slate-500">Part {t.part} · {t.sourceLabel}</p>
+                    <p className="text-sm font-medium text-slate-900 truncate">{t.title}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await fetch(`/api/speaking/topics/${t.id}`, { method: 'DELETE' });
+                      if (res.ok) onSpeakingTopicDeleted?.(t.id);
+                    }}
+                    className="p-1.5 text-slate-400 hover:text-red-700 cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

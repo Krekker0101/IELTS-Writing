@@ -519,6 +519,10 @@ export const ReportView: React.FC<ReportViewProps> = ({
               </div>
             )}
 
+            {isSubmittingRevision && (
+              <AnalysisProgressPanel progress={revisionProgress} isRevision />
+            )}
+
             <textarea
               value={revisedDraft}
               onChange={(e) => setRevisedDraft(e.target.value)}
@@ -527,10 +531,6 @@ export const ReportView: React.FC<ReportViewProps> = ({
               disabled={isSubmittingRevision}
               className="w-full p-6 text-[15px] leading-[1.75] text-slate-900 focus:outline-none resize-y"
             />
-
-            {isSubmittingRevision && (
-              <AnalysisProgressPanel progress={revisionProgress} isRevision />
-            )}
 
             <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-3">
               <button

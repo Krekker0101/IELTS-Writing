@@ -19,27 +19,38 @@ import {
 import type {
   ErrorJournalEntry,
   PersonalizedExercise,
+  SpeakingSessionRecord,
   Submission,
+  VocabularyFlashcard,
 } from '../types/ielts';
 import { useAIStatus } from '../contexts/AIStatusContext';
+import { VocabularyFlashcards } from './VocabularyFlashcards';
 
 interface ProgressViewProps {
   submissions: Submission[];
+  speakingSessions?: SpeakingSessionRecord[];
   errorJournal: ErrorJournalEntry[];
   exercises: PersonalizedExercise[];
+  flashcards: VocabularyFlashcard[];
   onOpenSubmission: (sub: Submission) => void;
+  onOpenSpeakingSession?: (session: SpeakingSessionRecord) => void;
   onExercisesUpdated: (exercises: PersonalizedExercise[]) => void;
   onJournalUpdated: (journal: ErrorJournalEntry[]) => void;
+  onFlashcardsUpdated: (flashcards: VocabularyFlashcard[]) => void;
   onUserDataCleared: () => void;
 }
 
 export const ProgressView: React.FC<ProgressViewProps> = ({
   submissions,
+  speakingSessions = [],
   errorJournal,
   exercises,
+  flashcards,
   onOpenSubmission,
+  onOpenSpeakingSession,
   onExercisesUpdated,
   onJournalUpdated,
+  onFlashcardsUpdated,
   onUserDataCleared,
 }) => {
   const { beginProcessing, endProcessing } = useAIStatus();
@@ -51,21 +62,108 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
   const [confirmWipe, setConfirmWipe] = useState(false);
 
-  // Recharts trend controls
-  const [chartScope, setChartScope] = useState<'all' | 'criteria'>('all');
+  const hasSourceErrors = useMemo(() => {
+    if (errorJournal.length > 0) return true;
+    const hasWritingAnn = submissions.some((sub) =>
+      [sub.task1, sub.task2].some((part) =>
+        part?.revisions.some((rev) => rev.evaluation.annotations.length > 0)
+      )
+    );
+    if (hasWritingAnn) return true;
+    return speakingSessions.some((sess) =>
+      sess.turns.some((turn) => (turn.annotations?.length ?? 0) > 0)
+    );
+  }, [errorJournal, submissions, speakingSessions]);
+
+  // Recharts trend controls (default: 4 criteria over last 30 days)
+  const [timeRange, setTimeRange] = useState<'30d' | 'all'>('30d');
+  const [chartModule, setChartModule] = useState<'writing' | 'speaking'>(() =>
+    submissions.length === 0 && speakingSessions.length > 0 ? 'speaking' : 'writing'
+  );
+  const [chartScope, setChartScope] = useState<'criteria' | 'all'>('criteria');
   const [revisionBasis, setRevisionBasis] = useState<'latest' | 'initial'>('latest');
   const [visibleSeries, setVisibleSeries] = useState<Record<string, boolean>>({
     overallBand: true,
     taskAchievement: true,
     coherence: true,
+    fluency: true,
     lexical: true,
     grammar: true,
+    pronunciation: true,
   });
 
-  // Chronological Band + 4 IELTS criteria points
-  const bandPoints = useMemo(() => {
-    const ordered = [...submissions].reverse();
-    return ordered.map((s, idx) => {
+  interface CriteriaTrendPoint {
+    indexLabel: string;
+    dateLabel: string;
+    fullDate: string;
+    title: string;
+    overallBand: number;
+    taskAchievement?: number;
+    coherence?: number;
+    fluency?: number;
+    lexical?: number;
+    grammar?: number;
+    pronunciation?: number;
+  }
+
+  // Chronological Band + 4 IELTS criteria points (last 30 days or all time)
+  const { bandPoints, totalInModule } = useMemo<{
+    bandPoints: CriteriaTrendPoint[];
+    totalInModule: number;
+  }>(() => {
+    const cutoffMs = Date.now() - 30 * 86_400_000;
+
+    if (chartModule === 'speaking') {
+      const sorted = [...speakingSessions].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      const filtered =
+        timeRange === '30d'
+          ? sorted.filter((s) => new Date(s.createdAt).getTime() >= cutoffMs)
+          : sorted;
+
+      const findCrit = (
+        criteria: SpeakingSessionRecord['evaluation']['criteria'],
+        matcher: (name: string) => boolean
+      ): number | undefined => {
+        const found = criteria.find((c) => matcher(c.name));
+        return found ? Number(found.band.toFixed(1)) : undefined;
+      };
+
+      const pts: CriteriaTrendPoint[] = filtered.map((s, idx) => ({
+        indexLabel: `#${idx + 1}`,
+        dateLabel: new Date(s.createdAt).toLocaleDateString('ru-RU', {
+          day: '2-digit',
+          month: '2-digit',
+        }),
+        fullDate: new Date(s.createdAt).toLocaleString('ru-RU', {
+          day: '2-digit',
+          month: 'short',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        title: s.title || `Speaking #${idx + 1}`,
+        overallBand: Number(s.evaluation.speakingBand.toFixed(1)),
+        fluency: findCrit(s.evaluation.criteria, (n) => n.toLowerCase().includes('fluency')),
+        lexical: findCrit(s.evaluation.criteria, (n) => n.toLowerCase().includes('lexical')),
+        grammar: findCrit(s.evaluation.criteria, (n) => n.toLowerCase().includes('grammatical')),
+        pronunciation: findCrit(s.evaluation.criteria, (n) =>
+          n.toLowerCase().includes('pronunciation')
+        ),
+      }));
+
+      return { bandPoints: pts, totalInModule: sorted.length };
+    }
+
+    const sorted = [...submissions].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+    const filtered =
+      timeRange === '30d'
+        ? sorted.filter((s) => new Date(s.createdAt).getTime() >= cutoffMs)
+        : sorted;
+
+    const pts: CriteriaTrendPoint[] = filtered.map((s, idx) => {
       const pickRev = (part: Submission['task1']) => {
         if (!part || part.revisions.length === 0) return undefined;
         return revisionBasis === 'initial'
@@ -77,7 +175,6 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
       const r2 = pickRev(s.task2);
       const activeRevs = [r1, r2].filter((r): r is NonNullable<typeof r> => Boolean(r));
 
-      // Compute weighted Band (2x Task 2 when both present) or single task Band
       let overallBand = 0;
       if (r1 && r2) {
         overallBand =
@@ -107,6 +204,12 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
           day: '2-digit',
           month: '2-digit',
         }),
+        fullDate: new Date(s.createdAt).toLocaleString('ru-RU', {
+          day: '2-digit',
+          month: 'short',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
         title: s.mockTestTitle ?? s.task2?.taskTitle ?? s.task1?.taskTitle ?? `Работа #${idx + 1}`,
         overallBand,
         taskAchievement: avgCriterion((n) => {
@@ -118,15 +221,50 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
         grammar: avgCriterion((n) => n.toLowerCase().includes('grammatical')),
       };
     });
-  }, [submissions, revisionBasis]);
 
-  const seriesMeta = [
-    { key: 'overallBand', label: 'Overall Band', color: '#0f172a', strokeWidth: 3 },
-    { key: 'taskAchievement', label: 'Task Achievement / Response', color: '#1d4ed8', strokeWidth: 2 },
-    { key: 'coherence', label: 'Coherence & Cohesion', color: '#0f766e', strokeWidth: 2 },
-    { key: 'lexical', label: 'Lexical Resource', color: '#d97706', strokeWidth: 2 },
-    { key: 'grammar', label: 'Grammatical Range & Accuracy', color: '#dc2626', strokeWidth: 2 },
-  ] as const;
+    return { bandPoints: pts, totalInModule: sorted.length };
+  }, [submissions, speakingSessions, chartModule, timeRange, revisionBasis]);
+
+  const seriesMeta = useMemo(() => {
+    if (chartModule === 'speaking') {
+      return [
+        { key: 'overallBand', label: 'Overall Speaking', color: '#0f172a', strokeWidth: 3 },
+        { key: 'fluency', label: 'Fluency & Coherence', color: '#1d4ed8', strokeWidth: 2 },
+        { key: 'lexical', label: 'Lexical Resource', color: '#d97706', strokeWidth: 2 },
+        { key: 'grammar', label: 'Grammatical Range & Accuracy', color: '#dc2626', strokeWidth: 2 },
+        { key: 'pronunciation', label: 'Pronunciation', color: '#0f766e', strokeWidth: 2 },
+      ] as const;
+    }
+    return [
+      { key: 'overallBand', label: 'Overall Writing', color: '#0f172a', strokeWidth: 3 },
+      { key: 'taskAchievement', label: 'Task Achievement / Response', color: '#1d4ed8', strokeWidth: 2 },
+      { key: 'coherence', label: 'Coherence & Cohesion', color: '#0f766e', strokeWidth: 2 },
+      { key: 'lexical', label: 'Lexical Resource', color: '#d97706', strokeWidth: 2 },
+      { key: 'grammar', label: 'Grammatical Range & Accuracy', color: '#dc2626', strokeWidth: 2 },
+    ] as const;
+  }, [chartModule]);
+
+  const criterionDeltas = useMemo(() => {
+    const criteriaList = seriesMeta.filter((s) => s.key !== 'overallBand');
+    return criteriaList.map((item) => {
+      const vals = bandPoints
+        .map((pt) => pt[item.key as keyof CriteriaTrendPoint])
+        .filter((v): v is number => typeof v === 'number');
+      const first = vals[0];
+      const latest = vals[vals.length - 1];
+      const delta =
+        vals.length >= 2 && typeof first === 'number' && typeof latest === 'number'
+          ? Number((latest - first).toFixed(1))
+          : null;
+      return {
+        key: item.key,
+        label: item.label,
+        color: item.color,
+        latest: typeof latest === 'number' ? latest : null,
+        delta,
+      };
+    });
+  }, [seriesMeta, bandPoints]);
 
   const toggleSeries = (key: string) => {
     setVisibleSeries((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -277,20 +415,88 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
       </div>
 
       {/* Analytics Row: Recharts Band & Criteria Trends + Breakdown */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <section
+        data-onboarding="progress-view"
+        className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start rounded-2xl"
+      >
         <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold text-slate-900">
-                Динамика Band Score и критериев IELTS
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Отслеживайте прогресс общего балла и четырёх официальных критериев от работы к работе.
-              </p>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900">
+                  Динамика Band Score по 4 критериям IELTS
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {timeRange === '30d'
+                    ? 'Изменение баллов за последние 30 дней по четырём официальным критериям.'
+                    : 'Полная хронология изменения баллов по четырём критериям IELTS.'}
+                </p>
+              </div>
+
+              <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-lg shrink-0 self-start">
+                <button
+                  type="button"
+                  onClick={() => setTimeRange('30d')}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
+                    timeRange === '30d'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  За 30 дней
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimeRange('all')}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
+                    timeRange === 'all'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  За всё время
+                </button>
+              </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2">
               <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setChartModule('writing')}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
+                    chartModule === 'writing'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Writing ({submissions.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChartModule('speaking')}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
+                    chartModule === 'speaking'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Speaking ({speakingSessions.length})
+                </button>
+              </div>
+
+              <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setChartScope('criteria')}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
+                    chartScope === 'criteria'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  4 критерия
+                </button>
                 <button
                   type="button"
                   onClick={() => setChartScope('all')}
@@ -302,43 +508,34 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
                 >
                   Общий + критерии
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setChartScope('criteria')}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
-                    chartScope === 'criteria'
-                      ? 'bg-white text-slate-900 shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Только 4 критерия
-                </button>
               </div>
 
-              <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
-                <button
-                  type="button"
-                  onClick={() => setRevisionBasis('latest')}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
-                    revisionBasis === 'latest'
-                      ? 'bg-white text-slate-900 shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Финальная
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRevisionBasis('initial')}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
-                    revisionBasis === 'initial'
-                      ? 'bg-white text-slate-900 shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Версия 1
-                </button>
-              </div>
+              {chartModule === 'writing' && (
+                <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setRevisionBasis('latest')}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
+                      revisionBasis === 'latest'
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Финальная
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRevisionBasis('initial')}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
+                      revisionBasis === 'initial'
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Версия 1
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -370,105 +567,149 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
           </div>
 
           {bandPoints.length === 0 ? (
-            <div className="py-14 text-center border border-dashed border-slate-200 rounded-lg">
+            <div className="py-12 px-4 text-center border border-dashed border-slate-200 rounded-lg space-y-2">
               <p className="text-sm font-medium text-slate-700">
-                График тренда появится после первой проверенной работы
+                {timeRange === '30d' && totalInModule > 0
+                  ? 'За последние 30 дней проверенных работ по этому модулю нет'
+                  : 'График динамики появится после первой проверенной работы'}
               </p>
-              <p className="text-xs text-slate-500 mt-1">
-                Здесь отобразятся изменения Overall Band, Task Achievement/Response, Coherence, Lexical Resource и Grammar.
+              <p className="text-xs text-slate-500">
+                Здесь отобразятся изменения четырёх официальных критериев IELTS за выбранный период.
               </p>
+              {timeRange === '30d' && totalInModule > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setTimeRange('all')}
+                  className="mt-1 inline-flex items-center px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 cursor-pointer"
+                >
+                  Показать данные за всё время ({totalInModule})
+                </button>
+              )}
             </div>
           ) : (
-            <div className="h-[290px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart
-                  data={bandPoints}
-                  margin={{ top: 12, right: 16, left: -12, bottom: 4 }}
-                >
-                  <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
-                  <XAxis
-                    dataKey="indexLabel"
-                    tick={{ fontSize: 11, fill: '#64748b' }}
-                    axisLine={{ stroke: '#cbd5e1' }}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    domain={[3.5, 9]}
-                    ticks={[4, 5, 6, 7, 8, 9]}
-                    tickFormatter={(v: number) => v.toFixed(1)}
-                    tick={{ fontSize: 11, fill: '#64748b' }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <ReferenceLine
-                    y={7}
-                    stroke="#cbd5e1"
-                    strokeDasharray="4 4"
-                    label={{
-                      value: 'Band 7.0',
-                      position: 'insideTopRight',
-                      fill: '#64748b',
-                      fontSize: 10,
-                    }}
-                  />
-                  <Tooltip
-                    content={({ active, payload }) => {
-                      if (!active || !payload || payload.length === 0) return null;
-                      const pt = payload[0]?.payload as (typeof bandPoints)[number] | undefined;
-                      if (!pt) return null;
-                      return (
-                        <div className="bg-white border border-slate-200 rounded-lg p-3 shadow-md text-xs space-y-1.5 max-w-[260px]">
-                          <p className="font-semibold text-slate-900 truncate">{pt.title}</p>
-                          <p className="text-[11px] text-slate-500">
-                            {pt.indexLabel} · {pt.dateLabel}
-                          </p>
-                          <div className="pt-1 border-t border-slate-100 space-y-1">
-                            {payload.map((entry) => (
-                              <div
-                                key={String(entry.dataKey)}
-                                className="flex items-center justify-between gap-4"
-                              >
-                                <span className="flex items-center gap-1.5 text-slate-700">
-                                  <span
-                                    className="w-2 h-2 rounded-full shrink-0"
-                                    style={{ backgroundColor: entry.color }}
-                                  />
-                                  {entry.name}
-                                </span>
-                                <span className="font-mono tabular-nums font-semibold text-slate-900">
-                                  {typeof entry.value === 'number'
-                                    ? entry.value.toFixed(1)
-                                    : '—'}
-                                </span>
-                              </div>
-                            ))}
+            <>
+              <div className="h-[290px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart
+                    data={bandPoints}
+                    margin={{ top: 12, right: 16, left: -12, bottom: 4 }}
+                  >
+                    <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
+                    <XAxis
+                      dataKey="dateLabel"
+                      tick={{ fontSize: 11, fill: '#64748b' }}
+                      axisLine={{ stroke: '#cbd5e1' }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      domain={[3.5, 9]}
+                      ticks={[4, 5, 6, 7, 8, 9]}
+                      tickFormatter={(v: number) => v.toFixed(1)}
+                      tick={{ fontSize: 11, fill: '#64748b' }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <ReferenceLine
+                      y={7}
+                      stroke="#cbd5e1"
+                      strokeDasharray="4 4"
+                      label={{
+                        value: 'Band 7.0',
+                        position: 'insideTopRight',
+                        fill: '#64748b',
+                        fontSize: 10,
+                      }}
+                    />
+                    <Tooltip
+                      content={({ active, payload }) => {
+                        if (!active || !payload || payload.length === 0) return null;
+                        const pt = payload[0]?.payload as (typeof bandPoints)[number] | undefined;
+                        if (!pt) return null;
+                        return (
+                          <div className="bg-white border border-slate-200 rounded-lg p-3 shadow-md text-xs space-y-1.5 max-w-[270px]">
+                            <p className="font-semibold text-slate-900 truncate">{pt.title}</p>
+                            <p className="text-[11px] text-slate-500">
+                              {pt.indexLabel} · {pt.fullDate}
+                            </p>
+                            <div className="pt-1 border-t border-slate-100 space-y-1">
+                              {payload.map((entry) => (
+                                <div
+                                  key={String(entry.dataKey)}
+                                  className="flex items-center justify-between gap-4"
+                                >
+                                  <span className="flex items-center gap-1.5 text-slate-700">
+                                    <span
+                                      className="w-2 h-2 rounded-full shrink-0"
+                                      style={{ backgroundColor: entry.color }}
+                                    />
+                                    {entry.name}
+                                  </span>
+                                  <span className="font-mono tabular-nums font-semibold text-slate-900">
+                                    {typeof entry.value === 'number'
+                                      ? entry.value.toFixed(1)
+                                      : '—'}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    }}
-                  />
-                  {seriesMeta
-                    .filter((s) =>
-                      chartScope === 'criteria'
-                        ? s.key !== 'overallBand' && visibleSeries[s.key]
-                        : visibleSeries[s.key]
-                    )
-                    .map((s) => (
-                      <Line
-                        key={s.key}
-                        type="monotone"
-                        dataKey={s.key}
-                        name={s.label}
-                        stroke={s.color}
-                        strokeWidth={s.strokeWidth}
-                        dot={{ r: 4, fill: '#ffffff', strokeWidth: 2 }}
-                        activeDot={{ r: 6 }}
-                        connectNulls
+                        );
+                      }}
+                    />
+                    {seriesMeta
+                      .filter((s) =>
+                        chartScope === 'criteria'
+                          ? s.key !== 'overallBand' && visibleSeries[s.key]
+                          : visibleSeries[s.key]
+                      )
+                      .map((s) => (
+                        <Line
+                          key={s.key}
+                          type="monotone"
+                          dataKey={s.key}
+                          name={s.label}
+                          stroke={s.color}
+                          strokeWidth={s.strokeWidth}
+                          dot={{ r: 4, fill: '#ffffff', strokeWidth: 2 }}
+                          activeDot={{ r: 6 }}
+                          connectNulls
+                        />
+                      ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* 4-Criteria Delta Strip */}
+              <div className="pt-3 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {criterionDeltas.map((c) => (
+                  <div key={c.key} className="space-y-0.5">
+                    <p className="text-[11px] text-slate-500 truncate flex items-center gap-1.5">
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: c.color }}
                       />
-                    ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+                      <span className="truncate">{c.label}</span>
+                    </p>
+                    <p className="text-sm font-bold font-mono tabular-nums text-slate-900">
+                      {c.latest !== null ? c.latest.toFixed(1) : '—'}
+                      {c.delta !== null && (
+                        <span
+                          className={`ml-1.5 text-xs font-semibold ${
+                            c.delta > 0
+                              ? 'text-emerald-700'
+                              : c.delta < 0
+                              ? 'text-red-600'
+                              : 'text-slate-500'
+                          }`}
+                        >
+                          {c.delta > 0 ? `+${c.delta.toFixed(1)}` : c.delta.toFixed(1)}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
 
@@ -722,6 +963,13 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
         )}
       </section>
 
+      {/* Vocabulary Flashcards */}
+      <VocabularyFlashcards
+        flashcards={flashcards}
+        hasSourceErrors={hasSourceErrors}
+        onFlashcardsUpdated={onFlashcardsUpdated}
+      />
+
       {/* History Table (Section 18) */}
       <section className="space-y-4">
         <h2 className="text-xl font-semibold text-slate-900">
@@ -798,6 +1046,66 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* Speaking History Section */}
+      <section className="space-y-4">
+        <h2 className="text-xl font-semibold text-slate-900">
+          История Speaking-сессий ({speakingSessions.length})
+        </h2>
+        {speakingSessions.length === 0 ? (
+          <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-sm text-slate-500">
+            Speaking-сессий пока нет. Запустите Mock Test или практику в разделе Speaking Lab.
+          </div>
+        ) : (
+          <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-600">
+                  <th className="text-left py-3 px-4 font-semibold">Дата</th>
+                  <th className="text-left py-3 px-4 font-semibold">Сессия</th>
+                  <th className="text-left py-3 px-4 font-semibold">Режим</th>
+                  <th className="text-right py-3 px-4 font-semibold">Ответы</th>
+                  <th className="text-right py-3 px-4 font-semibold">Band (AI)</th>
+                  <th className="text-right py-3 px-4 font-semibold">Отчёт</th>
+                </tr>
+              </thead>
+              <tbody>
+                {speakingSessions.map((ses) => (
+                  <tr
+                    key={ses.id}
+                    className="border-b border-slate-100 last:border-0 hover:bg-slate-50/70"
+                  >
+                    <td className="py-3 px-4 text-xs text-slate-500 font-mono tabular-nums whitespace-nowrap">
+                      {new Date(ses.createdAt).toLocaleDateString('ru-RU')}
+                    </td>
+                    <td className="py-3 px-4 font-medium text-slate-900">{ses.title}</td>
+                    <td className="py-3 px-4 text-xs text-slate-600 whitespace-nowrap">
+                      {ses.isFullMock ? 'Full Mock' : `Part ${ses.part ?? 1}`} · {ses.mode}
+                    </td>
+                    <td className="py-3 px-4 text-right font-mono tabular-nums text-xs text-slate-700">
+                      {ses.turns.length}
+                    </td>
+                    <td className="py-3 px-4 text-right font-mono tabular-nums font-semibold text-slate-900">
+                      {ses.evaluation.speakingBand.toFixed(1)}
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      {onOpenSpeakingSession && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenSpeakingSession(ses)}
+                          className="text-xs font-semibold text-[#FF4B3A] hover:underline cursor-pointer whitespace-nowrap"
+                        >
+                          Открыть →
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

@@ -1,6 +1,6 @@
 {
   "name": "IELTS Writing Lab",
   "description": "Интерактивная платформа для подготовки к IELTS Writing (Academic и General Training) с мок-тестами, ИИ-анализом по 4 критериям, минимальными исправлениями, журналом ошибок и персональными упражнениями.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

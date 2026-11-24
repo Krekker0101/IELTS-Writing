@@ -9,9 +9,9 @@ interface AnalysisProgressPanelProps {
 
 const STAGE_ORDER: Record<AnalysisProgressEvent['stageKey'], number> = {
   connect: 0,
-  criteria: 1,
   checklist: 1,
-  annotations: 2,
+  annotations: 1,
+  criteria: 2,
   revision_diff: 2,
   anchoring: 3,
   saving: 3,
@@ -46,14 +46,14 @@ export const AnalysisProgressPanel: React.FC<AnalysisProgressPanelProps> = ({
   const steps = isRevision
     ? [
         'Подключение к Gemini',
-        'Оценка новой редакции',
-        'Сравнение и разметка правок',
+        'Поиск ошибок и сравнение правок',
+        'Оценка 4 критериев IELTS',
         'Пересчёт Band Score',
       ]
     : [
         'Подключение к Gemini',
+        'Проверка условий и поиск ошибок',
         'Оценка 4 критериев IELTS',
-        'Поиск точечных исправлений',
         'Привязка и Band Score',
       ];
 

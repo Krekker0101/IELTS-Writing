@@ -1,16 +1,8 @@
 import React from 'react';
 import { AIStatusIndicator } from './AIStatusIndicator';
+import type { AppRoute } from './SidebarNav';
 
-export type AppRoute =
-  | 'home'
-  | 'mock'
-  | 'practice1'
-  | 'practice2'
-  | 'topics'
-  | 'progress'
-  | 'admin'
-  | 'workspace'
-  | 'report';
+export type { AppRoute };
 
 interface NavbarProps {
   currentRoute: AppRoute;
